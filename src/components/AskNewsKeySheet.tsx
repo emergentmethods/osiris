@@ -5,7 +5,7 @@ import { forgetAskNewsKey, loadAskNewsKey, saveAskNewsKey } from '@/lib/asknews-
 export default function AskNewsKeySheet({ onClose, serverConfigured }: { onClose(): void; serverConfigured: boolean }) {
   const dialog = useRef<HTMLElement>(null);
   const close = useRef(onClose);
-  close.current = onClose;
+  useLayoutEffect(() => { close.current = onClose; }, [onClose]);
   useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const section = dialog.current;

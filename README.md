@@ -194,7 +194,7 @@ Open [http://localhost:3000](http://localhost:3000)
 ```bash
 git clone https://github.com/simplifaisoul/osiris.git
 cd osiris
-cp .env.example .env     # optional — configure keys / port
+cp .env.template .env     # optional — configure keys / port
 docker compose up -d
 ```
 
@@ -233,7 +233,7 @@ Invalid numeric overrides use the defaults. Test/self-host endpoint overrides re
 ### Environment Variables
 
 OSIRIS works **partially without any API keys** — all core feeds use public,
-keyless sources. Copy [`.env.example`](.env.example) to `.env` and set only
+keyless sources. Copy [`.env.template`](.env.template) to `.env` and set only
 what you need:
 
 ```env
