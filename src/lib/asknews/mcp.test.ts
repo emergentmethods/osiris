@@ -198,3 +198,41 @@ describe('request-owned MCP operations through real HTTP', () => {
     expect(requests.filter(r => r.rpc === method)).toHaveLength(1);
   });
 });
+
+it('carries Forecast request credentials into real MCP HTTP and returns paraphrase-only evidence in a completed quick run', async () => {
+  const { credentials, startPrediction } = await import('../oi/service');
+  const { waitForEnd } = await import('../oi/runs');
+  const { createDemoChat } = await import('../oi/demo');
+  const { researchWeb } = await import('../oi/web');
+  const { sourceTexts, parseCites } = await import('../oi/sources');
+  vi.stubEnv('ASKNEWS_MCP_URL', url);
+  vi.stubEnv('ASKNEWS_API_KEY', 'offline-operator-fallback');
+  try {
+    sse = true;
+    result = { content: [{ type: 'text', text: JSON.stringify({ overview: `Generated overview ${key}`, sources: [{ title: 'Envoys agree on Geneva framework', url: 'https://publisher.test/a', summary: `Negotiators agree nine chapters ${key}`, raw_text: 'DROP RAW' }] }) }] };
+    const creds = credentials(new Request('https://osiris.test/api/oi/runs', { headers: { 'X-OI-Provider': 'openai', 'X-OI-Key': 'fixture-model-key', 'X-AskNews-Key': key } }));
+    if ('error' in creds) throw new Error(creds.error);
+    const prompts: string[] = [];
+    const demo = createDemoChat();
+    const started = startPrediction({ question: 'Will the envoys agree the Geneva framework?', depth: 'quick' }, creds, '192.0.2.211', {
+      chat: async req => {
+        prompts.push(req.user);
+        return req.user.includes('Plan the research') ? { text: JSON.stringify({ asknews: [{ tool: tool.name, args: {} }] }), input: 1, output: 1 } : demo(req);
+      },
+      gather: async () => [],
+      research: (plan, question, limit, signal, asknews) => researchWeb(plan, question, limit, signal, { api: async () => Response.json({ query: { pages: [] } }), page: async () => { throw new Error('AskNews must not be scraped'); }, gdeltGapMs: 0 }, asknews),
+    });
+    if (!started.ok) throw new Error(started.error);
+    await waitForEnd(started.run, 10_000);
+    expect(started.run.state.status).toBe('done');
+    expect(started.run.state.context.find(c => c.id === 'w1')).toMatchObject({ provenance: 'asknews', source: 'publisher.test via AskNews', published: '' });
+    expect(started.run.state.context.find(c => c.id === 'an1')?.title).toBe('AskNews DeepNews synthesis');
+    const sources = sourceTexts(started.run.state.context);
+    expect(parseCites([{ source: 'w1', quote: 'Envoys agree on Geneva framework' }], sources)[0].exact).toBe(false);
+    const serialized = JSON.stringify({ state: started.run.state, events: started.run.events, prompts });
+    for (const excluded of [key, 'fixture-model-key', 'offline-operator-fallback', 'DROP RAW']) expect(serialized).not.toContain(excluded);
+    expect(requests.filter(r => r.rpc === 'tools/call')).toHaveLength(1);
+    expect(requests.every(r => r.method === 'POST' && r.auth === key)).toBe(true);
+    expect(prompts.filter(p => p.includes('Plan the research'))).toHaveLength(1);
+  } finally { vi.unstubAllEnvs(); }
+});

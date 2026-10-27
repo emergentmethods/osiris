@@ -122,3 +122,16 @@ describe('the run store', () => {
     expect(getRun('00000000-0000-0000-0000-000000000000')).toBeUndefined();
   });
 });
+
+it('keeps the AskNews handle in closures and scrubs it alongside the model key on terminal errors', async () => {
+  const modelKey = 'fixture-model-private';
+  const asknews = { tools: async () => [], call: async () => ({ articles: [], notes: [] }), scrub: (s: string) => s.replaceAll('fixture-news-private', '[redacted]') };
+  const started = startRun(input({ key: modelKey, asknews }), { chat: async () => { throw new Error(`${modelKey} fixture-news-private`); } });
+  if (!started.ok) throw new Error(started.error);
+  await waitForEnd(started.run, 5000);
+  const output = JSON.stringify({ state: started.run.state, events: started.run.events });
+  expect(output).not.toContain(modelKey);
+  expect(output).not.toContain('fixture-news-private');
+  expect(started.run).not.toHaveProperty('asknews');
+  expect(started.run.state).not.toHaveProperty('asknews');
+});

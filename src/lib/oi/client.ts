@@ -9,6 +9,7 @@
  * to be remembered, otherwise in sessionStorage, which the tab forgets when it
  * closes. It travels to OSIRIS in a header on each call that needs it.
  */
+import { askNewsHeaders } from '../asknews-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderId } from './providers';
 import { applyEvent, currentAnswer, currentProbability, initialState, type RunState } from './state';
@@ -223,7 +224,7 @@ export function useOi() {
     try {
       res = await fetch('/api/oi/runs', {
         method: 'POST',
-        headers: headersFor(engine, key),
+        headers: { ...headersFor(engine, key), ...askNewsHeaders() },
         body: JSON.stringify({ question: input.question, seed: input.seed, seed_scope: input.seedScope, depth: input.depth, use_feeds: input.useFeeds }),
       });
     } catch {
