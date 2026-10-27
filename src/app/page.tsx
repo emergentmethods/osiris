@@ -1022,8 +1022,9 @@ export default function Dashboard() {
       setAskNewsKey(loadAskNewsKey());
       setActiveLayers(prev => ({ ...prev, asknews: false }));
     };
-    setAskNewsKey(loadAskNewsKey());
-    return subscribeAskNewsKey(changed);
+    const initial = window.setTimeout(() => setAskNewsKey(loadAskNewsKey()), 0);
+    const unsubscribe = subscribeAskNewsKey(changed);
+    return () => { window.clearTimeout(initial); unsubscribe(); };
   }, [newsLoader]);
   useLayoutEffect(() => {
     const enabled = activeLayers.asknews && askNewsReady;
