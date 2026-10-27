@@ -65,7 +65,7 @@ export interface Card {
   kind: 'find' | 'show' | 'markets' | 'forecast' | 'place' | 'scan' | 'camera' | 'asknews';
   title: string;
   subtitle?: string;
-  items: { label: string; detail?: string; lat?: number; lng?: number; url?: string; value?: string; tone?: 'up' | 'down' }[];
+  items: { label: string; detail?: string; keyPoints?: string[]; note?: string; lat?: number; lng?: number; url?: string; value?: string; tone?: 'up' | 'down' }[];
   /** A forecast card follows the run it started. */
   runId?: string;
 }
@@ -192,10 +192,10 @@ export async function runCall(call: Call, site: Site, signal?: AbortSignal): Pro
       try {
         const output = await site.asknews({ tool: a.tool, args: a.args as Record<string, unknown> }, signal);
         return ok('asknews', `${output.articles.length} articles via AskNews. ${output.notes.length} notes. Paraphrase only.`, output,
-          { kind: 'asknews', title: 'Reporting via AskNews', subtitle: 'Paraphrase · place mentioned', items: [
-            ...output.articles.map(article => ({ label: article.title, detail: [article.source_name, article.published, ...article.key_points].filter(Boolean).join(' · '), url: article.link,
+          { kind: 'asknews', title: 'Reporting via AskNews', subtitle: output.articles.some(a => a.coords) ? 'Paraphrase · place mentioned' : 'Paraphrase', items: [
+            ...output.articles.map(article => ({ label: article.title, detail: [article.source_name, article.published].filter(Boolean).join(' · '), keyPoints: article.key_points, url: article.link,
               ...(article.coords ? { lat: article.coords[0], lng: article.coords[1] } : {}) })),
-            ...output.notes.map(note => ({ label: note.title, detail: note.text })),
+            ...output.notes.map(note => ({ label: note.title, note: note.text })),
           ] });
       } catch (error) {
         const message = error instanceof Error && Object.values(ASKNEWS_STATUS).includes(error.message) ? error.message : ASKNEWS_STATUS.unavailable;

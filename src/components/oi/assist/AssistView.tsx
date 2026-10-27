@@ -185,7 +185,10 @@ function CardView({ card, oi, onLocate, onOpenForecast, onWorkspace }: {
           );
           if (card.kind === 'asknews') return (
             <div key={i} className="flex flex-col gap-1 px-3 py-2">
-              <div className="flex items-center gap-2">{body}</div>
+              <h4 className="text-[11.5px] leading-snug break-words text-[var(--text-primary)]">{it.label}</h4>
+              {it.detail && <p className="text-[10px] font-mono break-words text-[var(--text-muted)]">{it.detail}</p>}
+              {!!it.keyPoints?.length && <ul className="list-disc pl-4 text-[11px] leading-relaxed break-words text-[var(--text-muted)]">{it.keyPoints.map((point, n) => <li key={n}>{point}</li>)}</ul>}
+              {it.note && <details className="text-[11px] text-[var(--text-muted)]"><summary className="cursor-pointer text-[var(--cyan-primary)]">Read full note</summary><p className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words leading-relaxed">{it.note}</p></details>}
               <div className="flex gap-3 text-[11px] text-[var(--cyan-primary)]">
                 {placed && <button onClick={() => onLocate(it.lat!, it.lng!, 8)} title="Locate place mentioned">Locate place mentioned</button>}
                 {it.url && <a href={it.url} target="_blank" rel="noopener noreferrer">Original source ↗</a>}

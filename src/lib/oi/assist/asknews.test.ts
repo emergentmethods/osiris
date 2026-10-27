@@ -42,3 +42,13 @@ describe('Assist model-selected AskNews', () => {
     expect(JSON.stringify(out)).not.toContain('private-key-sentinel');
   });
 });
+
+it('returns complete successful reporting and notes without inventing a place subtitle', async () => {
+  const note = 'Long synthesis '.repeat(200) + 'ENDING';
+  const site = { asknews: async () => ({ articles: [{ id: 'fixture', title: 'Long headline '.repeat(20), source_name: 'Publisher', source: 'Publisher', published: '2026-10-27', key_points: ['First key point', 'Second key point'], via: 'AskNews', link: 'https://publisher.test/report', place: null, coords: null }], notes: [{ kind: 'synthesis', title: 'AskNews DeepNews synthesis', text: note }] }) } as unknown as Site;
+  const out = await runCall({ tool: 'asknews', args: { tool: 'OddCamelTool', args: {} } }, site);
+  expect(out.result.ok).toBe(true);
+  expect(out.card?.subtitle).toBe('Paraphrase');
+  expect(out.card?.items[0]).toMatchObject({ keyPoints: ['First key point', 'Second key point'], detail: 'Publisher · 2026-10-27' });
+  expect(out.card?.items[1]).toMatchObject({ note, label: 'AskNews DeepNews synthesis' });
+});
