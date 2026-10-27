@@ -7,6 +7,9 @@ import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Route, Radar
 import { type TerrainStatus } from '@/lib/map-terrain';
 import { loadCameraCatalog, mergeCameraCatalog } from '@/lib/camera-catalog';
 import IntelFeed from '@/components/IntelFeed';
+import AskNewsKeySheet from '@/components/AskNewsKeySheet';
+import { askNewsHeaders, createNewsLoader, loadAskNewsKey, subscribeAskNewsKey } from '@/lib/asknews-client';
+import { ASKNEWS_STATUS } from '@/lib/asknews/domain';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
 import SearchBar from '@/components/SearchBar';
@@ -152,9 +155,10 @@ function ViewSegment({ active, onClick, title, icon: Icon, label, layoutId }: {
 /* /api/news answers with its own `timestamp` and `total`; merged at the root
    they would be overwritten by the next endpoint, so the feed keeps its
    metadata under its own key. */
-const newsTransform = (d: { news?: unknown[]; sources?: unknown[]; timestamp?: string }) => ({
+const newsTransform = (d: import('@/lib/asknews-client').DashboardNewsBody) => ({
   news: d.news,
-  news_meta: { sources: d.sources ?? [], fetchedAt: d.timestamp ?? null },
+  news_meta: { sources: d.sources ?? [], fetchedAt: d.timestamp ?? null, asknews: d.asknews },
+  asknews: (d.news ?? []).filter(n => n.via === 'AskNews'),
   /* The reports that resolved to a place they name — the Live Alert Pins layer. */
   alert_pins: (d.news ?? []).filter(n => (n as { place?: unknown } | null)?.place),
 });
@@ -494,6 +498,7 @@ export default function Dashboard() {
        Off until asked for, like the other threat layers: the map opens with
        what a reader has chosen to see, and the feed reads the same without it. */
     alert_pins: false,
+    asknews: false,
     war_alerts: false,
     day_night: true,
     cables: true,
@@ -646,6 +651,9 @@ export default function Dashboard() {
     onTerrainFocus: () => setTerrainFocus(value => value + 1),
   };
   const [capabilities, setCapabilities] = useState<Record<string, boolean>>({});
+  const [askNewsSheet, setAskNewsSheet] = useState(false);
+  const [askNewsKey, setAskNewsKey] = useState({ key: '', remember: false });
+  const askNewsReady = !!askNewsKey.key || !!capabilities.asknews;
   const [liveFeedUrl, setLiveFeedUrl] = useState<string | null>(null);
   const [liveFeedName, setLiveFeedName] = useState('');
   const [liveFeedEmbedAllowed, setLiveFeedEmbedAllowed] = useState(true);
@@ -701,6 +709,9 @@ export default function Dashboard() {
         return next;
       });
     }
+
+    fetch('/api/news?probe=asknews', { cache: 'no-store' })
+      .then(r => r.json()).then(p => setCapabilities(c => ({ ...c, asknews: p.configured === true }))).catch(() => {});
 
     // Probe which credential-gated feeds this deployment has configured, so the
     // layer panel can hide toggles that could never return data.
@@ -987,13 +998,42 @@ export default function Dashboard() {
     }
   }, []);
 
+  const newsLoader = useRef<ReturnType<typeof createNewsLoader> | null>(null);
+  const [askNewsStatus, setAskNewsStatus] = useState<keyof typeof ASKNEWS_STATUS>('off');
+  useLayoutEffect(() => {
+    newsLoader.current = createNewsLoader(body => {
+      dataRef.current = { ...dataRef.current, ...newsTransform(body) };
+      setAskNewsStatus(body.asknews?.status ?? 'off');
+      setDataVersion(v => v + 1);
+    });
+    return () => newsLoader.current?.dispose();
+  }, []);
+  useEffect(() => {
+    const changed = () => {
+      newsLoader.current?.configure(false, {});
+      setAskNewsKey(loadAskNewsKey());
+      setActiveLayers(prev => ({ ...prev, asknews: false }));
+    };
+    setAskNewsKey(loadAskNewsKey());
+    return subscribeAskNewsKey(changed);
+  }, [newsLoader]);
+  useLayoutEffect(() => {
+    const enabled = activeLayers.asknews && askNewsReady;
+    newsLoader.current?.configure(enabled, askNewsHeaders());
+    void newsLoader.current?.load();
+    const poll = setInterval(() => void newsLoader.current?.load(true), 300000);
+    return () => { clearInterval(poll); newsLoader.current?.dispose(); };
+  }, [activeLayers.asknews, askNewsReady, askNewsKey, newsLoader]);
+  const askNewsPanelProps = {
+    onAskNewsKey: () => setAskNewsSheet(true), asknewsReady: askNewsReady,
+  };
+
   // ── PROGRESSIVE DATA LOADING (request-optimized) ──
   useEffect(() => {
     // Priority 1: Core feeds (always needed for panels)
     const eqUrl = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
     const eqTransform = (data: any) => ({ earthquakes: (data.features || []).map((f: any) => ({ id: f.id, lat: f.geometry?.coordinates?.[1] || 0, lng: f.geometry?.coordinates?.[0] || 0, depth: f.geometry?.coordinates?.[2] || 0, magnitude: f.properties?.mag, place: f.properties?.place, time: f.properties?.time, url: f.properties?.url, tsunami: f.properties?.tsunami, type: f.properties?.type, felt: f.properties?.felt, alert: f.properties?.alert })) });
     fetchEndpoint(eqUrl, eqTransform);
-    fetchEndpoint('/api/news', newsTransform);
     /* Official warnings — NOAA/NWS, GDACS, NASA EONET. A core feed rather than
        a layer fetch: Live Alerts lists them whether or not the weather layer
        is on, and this is the one thing in the panel a reader may have to act on. */
@@ -1022,8 +1062,6 @@ export default function Dashboard() {
     // Polling — OPTIMIZED intervals to minimize edge requests
     const intervals = [
       setInterval(() => fetchEndpoint(eqUrl, eqTransform, undefined, { skipWhenHidden: true }), 900000),  // 15 min (was 5)
-      // 5 min: the route caches each channel for 3, so Telegram sees at most one read per channel per window however many tabs poll.
-      setInterval(() => fetchEndpoint('/api/news', newsTransform, undefined, { skipWhenHidden: true }), 300000),
       // 5 min: a warning that has just been issued is the point of the panel.
       setInterval(() => fetchEndpoint('/api/weather', d => ({ weather_events: d.events }), undefined, { skipWhenHidden: true }), 300000),
       setInterval(() => fetchEndpoint('/api/markets', d => ({ markets: d }), undefined, { skipWhenHidden: true }), 900000), // 15 min (was 5)
@@ -1362,6 +1400,7 @@ export default function Dashboard() {
 
   return (
     <main className="fixed inset-0 w-full h-full bg-[var(--bg-void)] overflow-hidden">
+      {askNewsSheet && <AskNewsKeySheet onClose={() => setAskNewsSheet(false)} serverConfigured={!!capabilities.asknews} />}
 
       {/* ── SPLASH ── */}
       <AnimatePresence onExitComplete={() => setSplashGone(true)}>
@@ -1807,7 +1846,7 @@ export default function Dashboard() {
 
 
       {/* ── NEW SIDEBAR (Root Level) ── */}
-      {showLayers && !isMobile && <div data-hud><LayerPanel {...terrainPanelProps} revealed={revealed} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={layerLiveStatus} /></div>}
+      {showLayers && !isMobile && <div data-hud><LayerPanel {...askNewsPanelProps} {...terrainPanelProps} revealed={revealed} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={{ ...layerLiveStatus, asknews: !askNewsReady ? 'Needs key · click to configure' : ASKNEWS_STATUS[askNewsStatus] ?? 'Ready · source off' }} /></div>}
 
 
 
@@ -1893,7 +1932,7 @@ export default function Dashboard() {
           <AnimatePresence>
             {showAlerts && (
               <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="absolute right-12 top-1/2 -translate-y-1/2 w-80">
-                <LiveAlerts data={data} onLocate={(lat, lng, options) => setFlyToLocation({ lat, lng, zoom: options?.zoom, alertId: options?.alertId, ts: Date.now() })} pinsOn={activeLayers.alert_pins} onTogglePins={on => setActiveLayers(prev => ({ ...prev, alert_pins: on }))} onPinnedChange={setPinnedAlertIds} onWatchFeed={(url, name) => { setLiveFeedUrl(url); setLiveFeedName(name); }} onRefresh={() => fetchEndpoint('/api/news', newsTransform)} />
+                <LiveAlerts data={data} onLocate={(lat, lng, options) => setFlyToLocation({ lat, lng, zoom: options?.zoom, alertId: options?.alertId, ts: Date.now() })} pinsOn={activeLayers.alert_pins} onTogglePins={on => setActiveLayers(prev => ({ ...prev, alert_pins: on }))} onPinnedChange={setPinnedAlertIds} onWatchFeed={(url, name) => { setLiveFeedUrl(url); setLiveFeedName(name); }} onRefresh={() => newsLoader.current?.load()} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -2209,7 +2248,7 @@ export default function Dashboard() {
                           <div><div className="hud-label" style={{fontSize:'9px'}}>NUC</div><div className="hud-value text-[10px]" style={{color:'var(--accent-nuclear)'}}>{(data.infrastructure?.length||0)}</div></div>
                         </div>
                       </div>
-                      <LayerPanel {...terrainPanelProps} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={layerLiveStatus} />
+                      <LayerPanel {...askNewsPanelProps} {...terrainPanelProps} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={{ ...layerLiveStatus, asknews: !askNewsReady ? 'Needs key · click to configure' : ASKNEWS_STATUS[askNewsStatus] ?? 'Ready · source off' }} />
                       <div className="mt-8">
                         <ViewPresets onNavigate={(lat, lng, zoom) => { setFlyToLocation({ lat, lng, zoom, ts: Date.now() }); setMobilePanel(null); }} />
                       </div>

@@ -30,13 +30,18 @@ export function safeNewsUrl(value: unknown): string | null {
     return url.href;
   } catch { return null; }
 }
-export function mergeNews<T extends { link?: string; published?: string }>(publicItems: readonly T[], privateItems: readonly T[]): T[] {
-  const seen = new Set<string>();
-  return [...publicItems, ...privateItems].filter(item => {
+export function mergeNews<T extends { link?: string; published?: string; via?: string; also_via?: string }>(publicItems: readonly T[], privateItems: readonly T[]): T[] {
+  const indices = new Map<string, number>();
+  const items: T[] = [];
+  for (const item of [...publicItems, ...privateItems]) {
     const url = safeNewsUrl(item.link);
-    if (!url) return true;
-    if (seen.has(url)) return false;
-    seen.add(url);
-    return true;
-  }).sort((a, b) => (Date.parse(b.published ?? '') || 0) - (Date.parse(a.published ?? '') || 0));
+    const existing = url ? indices.get(url) : undefined;
+    if (existing !== undefined) {
+      if (item.via === 'AskNews' && items[existing].via !== 'AskNews') items[existing] = { ...items[existing], also_via: 'AskNews' };
+      continue;
+    }
+    if (url) indices.set(url, items.length);
+    items.push(item);
+  }
+  return items.sort((a, b) => (Date.parse(b.published ?? '') || 0) - (Date.parse(a.published ?? '') || 0));
 }

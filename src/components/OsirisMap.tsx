@@ -153,6 +153,9 @@ type LayerColor = NonNullable<Extract<Parameters<maplibregl.Map['addLayer']>[0],
 
 /** A Live Alerts report as /api/news sends it — only the fields a pin reads. */
 interface PinnedReport {
+  via?: 'AskNews';
+  also_via?: 'AskNews';
+  key_points?: string[];
   id: string;
   alert_kind?: string;
   title: string;
@@ -175,6 +178,8 @@ const DOUBLE_RIGHT_SLOP_PX = 12;
 
 /** What a pin carries: flat, as map feature properties must be. */
 interface AlertPinProps {
+  via: string;
+  key_points: string[];
   id: string;
   kind: AlertKind;
   /** Reports pinned to this same place, this one included. */
@@ -1782,8 +1787,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           <span style="color:#8A8880;margin-left:auto;">${htmlEsc(timeAgo(p.published))}</span>
         </div>
         <div style="color:#F2EFE8;font-family:Inter,system-ui,sans-serif;font-size:12.5px;font-weight:600;line-height:1.35;">${htmlEsc(p.title)}</div>
-        <div style="margin-top:6px;font-size:9.5px;color:#8A8880;">${htmlEsc(p.source_name)}${p.lean ? ` · <span style="color:#9B978E;">${htmlEsc(p.lean)}</span>` : ''}</div>
+        <div style="margin-top:6px;font-size:9.5px;color:#8A8880;">${htmlEsc(p.source_name)}${p.via === 'AskNews' ? ' · via AskNews' : ''}${p.lean ? ` · <span style="color:#9B978E;">${htmlEsc(p.lean)}</span>` : ''}</div>
         <div style="margin-top:6px;font-size:9.5px;color:${c};" title="The place the post names, resolved against OpenStreetMap. Town-level: a post names a place, not an exact spot.">📍 ${htmlEsc(p.place_label)}<span style="color:#5C5A54;"> · ${p.precision === 'region' ? 'region' : 'place'} named in the post · © OpenStreetMap</span></div>
+        ${p.via === 'AskNews' ? `<ul style="padding-left:14px;font-size:11px;">${p.key_points.map(point => `<li>${htmlEsc(point)}</li>`).join('')}</ul>` : ''}
         ${media}
         ${link !== '#' ? `<a href="${link}" target="_blank" rel="noopener noreferrer" style="${linkStyle}color:${c};border:1px solid ${c}66;background:${c}1a;">OPEN POST ↗</a>` : ''}
         ${more ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);"><div style="font-size:8.5px;letter-spacing:0.14em;color:#5C5A54;">ALSO HERE</div>${more}</div>` : ''}
@@ -2327,6 +2333,8 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         fresh: now - Date.parse(n.published) < ALERT_FRESH_MS,
         title: n.title,
         source_name: n.source_name,
+        via: n.via ?? n.also_via ?? '',
+        key_points: n.key_points ?? [],
         lean: n.lean ?? '',
         published: n.published,
         link: n.link ?? '',

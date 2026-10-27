@@ -11,6 +11,8 @@ import StyleStudio from './StyleStudio';
 import { TERRAIN_MIN_ZOOM, type TerrainStatus } from '@/lib/map-terrain';
 
 interface LayerPanelProps {
+  onAskNewsKey?: () => void;
+  asknewsReady?: boolean;
   data: any;
   activeLayers: any;
   setActiveLayers: React.Dispatch<React.SetStateAction<any>>;
@@ -134,6 +136,7 @@ const LAYER_GROUPS: LayerGroupDef[] = [
       { key: 'infrastructure', label: 'Nuclear Facilities', dataKey: 'infrastructure' },
       { key: 'global_incidents', label: 'Global Incidents', dataKey: 'gdelt' },
       { key: 'alert_pins', label: 'Live Alert Pins', dataKey: 'alert_pins' },
+      { key: 'asknews', label: 'AskNews', dataKey: 'asknews', description: 'Optional reporting · your AskNews key' },
       { key: 'gdelt_events', label: 'GDELT Events', dataKey: 'gdelt_events' },
     ],
   },
@@ -216,7 +219,7 @@ function SubLayerStem() {
   );
 }
 
-function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme, capabilities = {}, terrainStatus = 'idle', onTerrainRetry, onTerrainFocus, on3DModeSelected, revealed = true, liveStatus }: LayerPanelProps) {
+function LayerPanel({ onAskNewsKey, asknewsReady = false, data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme, capabilities = {}, terrainStatus = 'idle', onTerrainRetry, onTerrainFocus, on3DModeSelected, revealed = true, liveStatus }: LayerPanelProps) {
   const [hoveredGroup, setHoveredGroup] = useState<string | null>(null);
   /**
    * A pinned group stays open when the pointer leaves. Hover-only flyouts are
@@ -234,6 +237,7 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
   }, [pinnedGroup]);
 
   const toggle = (key: string) => {
+    if (key === 'asknews' && !asknewsReady && !activeLayers.asknews) { onAskNewsKey?.(); return; }
     if ((key === 'terrain_elevation' || key === 'terrain_3d') && !activeLayers[key]) on3DModeSelected?.();
     setActiveLayers((prev: any) => ({ ...prev, [key]: !prev[key] }));
   };
@@ -255,7 +259,7 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
     if (!anyOn && top.some(l => l.key === 'terrain_elevation' || l.key === 'terrain_3d')) on3DModeSelected?.();
     setActiveLayers((prev: any) => {
       const next = { ...prev };
-      for (const l of top) next[l.key] = !anyOn;
+      for (const l of top) next[l.key] = !anyOn && (l.key !== 'asknews' || asknewsReady);
       return next;
     });
   };
@@ -320,6 +324,7 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                 );
               })}
               {group.label === 'DISPLAY' && terrainDetails}
+              {group.layers.some(l => l.key === 'asknews') && <button type="button" onClick={onAskNewsKey} className="text-xs text-white/60 underline">AskNews key settings</button>}
             </div>
           </div>
         ))}
@@ -511,6 +516,7 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                         );
                       })}
                       {group.label === 'DISPLAY' && terrainDetails}
+                      {group.layers.some(l => l.key === 'asknews') && <button type="button" onClick={onAskNewsKey} className="text-xs text-white/60 underline">AskNews key settings</button>}
                     </div>
                   </motion.div>
                 )}

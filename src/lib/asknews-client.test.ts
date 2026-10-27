@@ -1,0 +1,57 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { askNewsHeaders, forgetAskNewsKey, loadAskNewsKey, saveAskNewsKey, subscribeAskNewsKey, createNewsLoader } from './asknews-client';
+const storage = () => { const values = new Map<string, string>(); return { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => values.set(k, v), removeItem: (k: string) => values.delete(k) }; };
+afterEach(() => vi.unstubAllGlobals());
+it('keeps one key slot and notifies same-tab consumers on save and Forget', () => {
+  const window = Object.assign(new EventTarget(), { localStorage: storage(), sessionStorage: storage() });
+  vi.stubGlobal('window', window);
+  const changed = vi.fn(); const unsubscribe = subscribeAskNewsKey(changed);
+  saveAskNewsKey('session-key', false);
+  expect(loadAskNewsKey()).toEqual({ key: 'session-key', remember: false });
+  saveAskNewsKey('remember-key', true);
+  expect(loadAskNewsKey()).toEqual({ key: 'remember-key', remember: true });
+  expect(window.sessionStorage.getItem('osiris.asknews.key')).toBeNull();
+  expect(askNewsHeaders()).toEqual({ 'X-AskNews-Key': 'remember-key' });
+  forgetAskNewsKey(); expect(askNewsHeaders()).toEqual({}); expect(changed).toHaveBeenCalledTimes(3);
+  unsubscribe();
+});
+it('rejects old-key and source-off completions even when a fetch ignores abort', async () => {
+  const requests: { resolve: (r: Response) => void; signal: AbortSignal }[] = [];
+  vi.stubGlobal('fetch', vi.fn((_url, init) => new Promise<Response>(resolve => requests.push({ resolve, signal: init.signal }))));
+  const sink = vi.fn(); const loader = createNewsLoader(sink);
+  loader.configure(true, { 'X-AskNews-Key': 'old-key' });
+  const old = loader.load();
+  loader.configure(true, { 'X-AskNews-Key': 'new-key' });
+  const current = loader.load();
+  requests[1].resolve(Response.json({ news: [{ title: 'Current', via: 'AskNews' }], asknews: { status: 'ok' } })); await current;
+  requests[0].resolve(Response.json({ news: [{ title: 'Old', via: 'AskNews' }], asknews: { status: 'ok' } })); await old;
+  expect(sink.mock.lastCall?.[0].news).toEqual([{ title: 'Current', via: 'AskNews' }]);
+  expect(requests[0].signal.aborted).toBe(true);
+  const late = loader.load(); loader.configure(false, {});
+  expect(sink.mock.lastCall?.[0].news).toEqual([]);
+  requests[2].resolve(Response.json({ news: [{ title: 'Late', via: 'AskNews' }], asknews: { status: 'ok' } })); await late;
+  expect(sink.mock.lastCall?.[0].news).toEqual([]);
+});
+it('skips hidden polls, replaces on success, retains transient same-key results and clears auth failures', async () => {
+  vi.stubGlobal('document', { hidden: true });
+  const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
+  const sink = vi.fn(); const loader = createNewsLoader(sink);
+  loader.configure(true, {}); await loader.load(true); expect(fetcher).not.toHaveBeenCalled();
+  fetcher.mockResolvedValueOnce(Response.json({ news: [{ title: 'Private', via: 'AskNews' }], asknews: { status: 'ok' } }));
+  await loader.load();
+  fetcher.mockResolvedValueOnce(Response.json({ news: [{ title: 'Public' }], asknews: { status: 'timeout' } }));
+  await loader.load(); expect(sink.mock.lastCall?.[0].asknews.status).toBe('stale'); expect(sink.mock.lastCall?.[0].news).toHaveLength(2);
+  fetcher.mockResolvedValueOnce(Response.json({ news: [{ title: 'Public' }], asknews: { status: 'auth' } }));
+  await loader.load(); expect(sink.mock.lastCall?.[0].news).toEqual([{ title: 'Public' }]);
+});
+it('also discards the old generation when it finishes before the new request', async () => {
+  const completions: ((r: Response) => void)[] = [];
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => completions.push(resolve))));
+  const sink = vi.fn(); const loader = createNewsLoader(sink);
+  loader.configure(true, { 'X-AskNews-Key': 'first-key' }); const first = loader.load();
+  loader.configure(true, { 'X-AskNews-Key': 'second-key' }); const second = loader.load();
+  completions[0](Response.json({ news: [{ title: 'Discard me', via: 'AskNews' }], asknews: { status: 'ok' } })); await first;
+  expect(sink.mock.lastCall?.[0].news).toEqual([]);
+  completions[1](Response.json({ news: [{ title: 'Keep me', via: 'AskNews' }], asknews: { status: 'ok' } })); await second;
+  expect(sink.mock.lastCall?.[0].news).toEqual([{ title: 'Keep me', via: 'AskNews' }]);
+});

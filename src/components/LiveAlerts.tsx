@@ -101,6 +101,8 @@ export interface WarningAlert {
 interface Carrier { source: string; source_name: string; lean: string | null; bloc: Bloc | null; link: string | null; published: string | null }
 
 interface NewsAlert {
+  via: 'AskNews' | null;
+  key_points: string[];
   kind: 'news';
   id: string;
   ts: number;
@@ -206,6 +208,8 @@ function toNews(raw: unknown): NewsAlert | null {
 
   return {
     kind: 'news',
+    via: a.via === 'AskNews' || a.also_via === 'AskNews' ? 'AskNews' : null,
+    key_points: Array.isArray(a.key_points) ? a.key_points.filter((p): p is string => typeof p === 'string').slice(0, 5) : [],
     id: str(a.id) ?? str(a.link) ?? title,
     ts,
     title,
@@ -347,6 +351,7 @@ function NewsCard({ item, now, open, wide, onToggle, onLocate }: {
           <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[9.5px] font-mono uppercase tracking-wider">
             {fresh && <span className="w-1.5 h-1.5 rounded-full animate-osiris-pulse" style={{ background: ACCENT }} title="Posted in the last 15 minutes" />}
             <span className="font-semibold text-[#E8E6E0]">{item.source_name}</span>
+            {item.via && <span className="normal-case text-[#00E5FF]">via AskNews</span>}
             {item.lean && <span style={{ color }} title={item.bloc ? BLOCS[item.bloc].label : undefined}>{item.lean}</span>}
           </div>
           <time dateTime={item.published} title={new Date(item.ts).toLocaleString()} className="flex-shrink-0 text-[9.5px] font-mono text-[#8A8880]">
@@ -358,6 +363,7 @@ function NewsCard({ item, now, open, wide, onToggle, onLocate }: {
           {item.flag && <span className="mr-1.5 inline-block translate-y-[-1px] rounded bg-[#FF3D3D]/15 px-1 text-[8.5px] font-mono font-bold tracking-wider text-[#FF6B6B]">BREAKING</span>}
           {item.title}
         </h4>
+        {item.via && <ul className="mt-1 list-disc pl-3 text-[11px] text-[#9B978E]">{item.key_points.map((point, index) => <li key={index}>{point}</li>)}</ul>}
         {!open && item.summary && (
           <p className="mt-1 font-sans text-[11px] leading-relaxed text-[#9B978E] line-clamp-2">{item.summary}</p>
         )}
@@ -398,6 +404,7 @@ function NewsCard({ item, now, open, wide, onToggle, onLocate }: {
         </div>
       </button>
 
+      {item.via && item.link && <a href={item.link} target="_blank" rel="noopener noreferrer" className="mx-2.5 mb-2 inline-block text-[10px] text-[#00E5FF]">Open source ↗</a>}
       {open && (
         <div className="px-2.5 pb-2.5 space-y-2">
           {video && (

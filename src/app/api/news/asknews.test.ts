@@ -18,7 +18,7 @@ it('composes private results without changing the public feed, including missing
   expect(response.headers.get('cache-control')).toBe('private, no-store');
   expect((await response.json()).news).toContainEqual(article);
   expect(await (await GET()).json()).toEqual(publicBody);
-  for (const headers of [{}, { 'X-AskNews-Key': 'bad' }]) {
+  for (const headers of [{}, { 'X-AskNews-Key': 'bad' }] as Record<string, string>[]) {
     const failed = await GET(new Request('http://localhost/api/news?asknews=1', { headers }));
     expect(failed.headers.get('cache-control')).toBe('private, no-store');
     expect((await failed.json()).asknews.status).toBe('X-AskNews-Key' in headers ? 'auth' : 'missing-key');

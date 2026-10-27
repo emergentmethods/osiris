@@ -101,12 +101,13 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
                   >
                     {/* Top row: risk badge + source + time */}
                     <div className="flex items-center gap-2 mb-1">
-                      <span className={`text-[10px] font-mono font-bold tracking-widest ${getRiskClass(item.risk_score)}`}>
+                      {item.via !== 'AskNews' && <span className={`text-[10px] font-mono font-bold tracking-widest ${getRiskClass(item.risk_score)}`}>
                         {getRiskLabel(item.risk_score)}
-                      </span>
+                      </span>}
                       <span className="text-[9px] font-mono text-[var(--text-muted)] bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded">
-                        {item.source}
+                        {item.source_name || item.source}
                       </span>
+                      {(item.via === 'AskNews' || item.also_via === 'AskNews') && <span className="text-[9px] text-[var(--cyan-primary)]">via AskNews</span>}
                       {item.coords && (
                         <button
                           onClick={(e) => {
@@ -129,6 +130,10 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
                       {item.title}
                     </h4>
 
+                    {item.via === 'AskNews' && <>
+                      <ul className="mt-1 text-[10px] text-[var(--text-muted)] list-disc pl-3">{item.key_points?.map((point: string, index: number) => <li key={index}>{point}</li>)}</ul>
+                      <a href={item.link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="mt-1 inline-block text-[10px] text-[var(--cyan-primary)]">Open source ↗</a>
+                    </>}
                     {/* Why the risk badge reads the way it does. Not an assessment:
                         the keyword filter's own working, shown so the badge is
                         read as a word count rather than a judgement. */}
