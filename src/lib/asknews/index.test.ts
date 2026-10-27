@@ -9,7 +9,7 @@ it('uses the installed SDK for two private pages and projects safe newest-first 
   vi.stubGlobal('fetch', vi.fn(async (input, init) => {
     const url = new URL(String(input));
     calls.push({ url, init });
-    return Response.json({ dicts: url.searchParams.get('offset') === '0' ? [
+    return Response.json({ as_dicts: url.searchParams.get('offset') === '0' ? [
       { article_id: 'old', title: 'Old report', article_url: 'https://publisher.test/old', pub_date: '2026-10-27T10:00:00Z', domain_url: 'publisher.test', key_points: ['A key point'], full_text: 'SECRET FULL TEXT', image_url: 'https://images.test/a' },
     ] : [
       { article_id: 'new', title: 'New report', article_url: 'https://publisher.test/new', pub_date: '2026-10-27T11:00:00Z', domain_url: 'publisher.test' },
@@ -46,7 +46,7 @@ it('uses fallback only when the reader did not supply a key and never echoes err
 it('honors self-hoster query overrides and keeps publication strings through a JSON round trip', async () => {
   vi.stubEnv('ASKNEWS_API_KEY', 'operator-key'); vi.stubEnv('ASKNEWS_FEED_SIZE', '12');
   vi.stubEnv('ASKNEWS_FEED_WINDOW_SECONDS', '7200'); vi.stubEnv('ASKNEWS_FEED_PAGE_RANK', '1000');
-  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ dicts: [{ title: 'A headline', article_url: 'https://publisher.test/a', pub_date: '2026-10-27T09:00:00Z', key_points: ['operator-key is redacted'] }] }));
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ as_dicts: [{ title: 'A headline', article_url: 'https://publisher.test/a', pub_date: '2026-10-27T09:00:00Z', key_points: ['operator-key is redacted'] }] }));
   vi.stubGlobal('fetch', fetcher);
   const articles = JSON.parse(JSON.stringify(await askNewsFor(new Headers()).latest()));
   expect(articles[0].published).toBe('2026-10-27T09:00:00.000Z');

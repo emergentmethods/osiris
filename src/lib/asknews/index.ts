@@ -54,8 +54,8 @@ export function askNewsFor(headers: Headers): AskNews {
         for (let offset = 0; offset < size; offset += 100) {
           const result = await client.searchNewsRaw({ ...params, nArticles: Math.min(100, size - offset), offset }, { signal });
           const body = await result.raw.json();
-          if (!Array.isArray(body.dicts)) throw new AskNewsError('invalid-response');
-          for (const raw of body.dicts) {
+          if (!Array.isArray(body.as_dicts)) throw new AskNewsError('invalid-response');
+          for (const raw of body.as_dicts) {
             if (!raw || typeof raw !== 'object') continue;
             const link = safeNewsUrl(raw.article_url);
             const title = scrub(raw.eng_title || raw.title, 520);
