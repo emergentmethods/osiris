@@ -501,11 +501,11 @@ function NewsCard({ item, now, open, wide, onToggle, onLocate }: {
               <button
                 type="button"
                 onClick={() => onLocate(item.coords![0], item.coords![1], { zoom: item.place!.precision === 'settlement' ? 10 : 7, alertId: item.id })}
-                title={`${item.place.label} — the place the post names. Town-level: a post names a place, not an exact spot.`}
+                title={item.place.precision === 'mentioned-place' ? `${item.place.label} — A place mentioned in this article, not a verified incident location.` : `${item.place.label} — the place the post names. Town-level: a post names a place, not an exact spot.`}
                 className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[9.5px] font-mono tracking-wider hover:bg-white/5"
                 style={{ color: kind.color, borderColor: `${kind.color}55` }}
               >
-                <MapPin className="w-2.5 h-2.5" /> {item.place.name.toUpperCase()}
+                <MapPin className="w-2.5 h-2.5" /> {item.place.name.toUpperCase()}{item.place.precision === 'mentioned-place' && ' · place mentioned'}
               </button>
             )}
             {item.coords && !item.place && (
