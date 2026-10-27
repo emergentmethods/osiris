@@ -97,6 +97,7 @@ export function mcpOperations(key: string, options: { url?: string } = {}): AskN
       const rows = Array.isArray(value) ? value : data && (Array.isArray(data.as_dicts) ? data.as_dicts : Array.isArray(data.sources) ? data.sources : Array.isArray(data.articles) ? data.articles : null);
       if (rows) for (const item of rows.slice(0, 25)) {
         const article = projectArticle(item, key);
+        if (article) delete article.wikidata_entities;
         if (article && output.articles.length < 25 && !output.articles.some(a => a.link === article.link)) output.articles.push(article);
       }
       if (data && typeof data.overview === 'string') output.notes.push({ kind: 'synthesis', title: 'AskNews DeepNews synthesis', text: text(data.overview, 4000) });
