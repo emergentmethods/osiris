@@ -1,11 +1,13 @@
 import { Configuration, NewsApi, type SearchNewsRequest } from '@emergentmethods/asknews-typescript-sdk';
+import { mcpOperations } from './mcp';
+import type { AskNewsOperations } from './mcp-domain';
 import { ASKNEWS_STATUS, mergeNews, safeNewsUrl, type AskNewsArticle, type AskNewsEntity, type AskNewsErrorCode } from './domain';
 
 export class AskNewsError extends Error {
   constructor(readonly code: AskNewsErrorCode) { super(ASKNEWS_STATUS[code]); }
 }
 export function operatorConfigured(): boolean { return !!process.env.ASKNEWS_API_KEY?.trim(); }
-export interface AskNews {
+export interface AskNews extends AskNewsOperations {
   latest(signal?: AbortSignal): Promise<AskNewsArticle[]>;
   near(lat: number, lng: number, signal?: AbortSignal): Promise<AskNewsArticle[]>;
 }
@@ -101,7 +103,17 @@ export function askNewsFor(headers: Headers): AskNews {
       throw new AskNewsError(error instanceof SyntaxError ? 'invalid-response' : 'unavailable');
     }
   };
+  const mcp = mcpOperations(key);
   return {
+    ...mcp,
+    tools(signal) {
+      if (!key && headers.has('X-AskNews-Key')) return Promise.reject(new AskNewsError('auth'));
+      return mcp.tools(signal);
+    },
+    call(call, signal) {
+      if (!key && headers.has('X-AskNews-Key')) return Promise.reject(new AskNewsError('auth'));
+      return mcp.call(call, signal);
+    },
     latest(signal) {
       return search({
         timeFilter: 'pub_date', startTimestamp: Math.floor(Date.now() / 1000) - setting('ASKNEWS_FEED_WINDOW_SECONDS', 1800, 1, 604800),

@@ -13,7 +13,7 @@ it('composes private results without changing the public feed, including missing
   const { askNewsFor } = await import('@/lib/asknews');
   const publicBody = await (await GET()).json();
   const article = { id: 'private', title: 'Private reporting', link: 'https://publisher.test/a', source: 'Publisher', source_name: 'Publisher', published: '2026-10-27T11:00:00Z', key_points: ['A point'], via: 'AskNews' as const, place: null, coords: null };
-  vi.mocked(askNewsFor).mockReturnValueOnce({ latest: async () => [article], near: async () => [] });
+  vi.mocked(askNewsFor).mockReturnValueOnce({ latest: async () => [article], near: async () => [], tools: async () => [], call: async () => ({ articles: [], notes: [] }), scrub: text => text });
   const response = await GET(new Request('http://localhost/api/news?asknews=1', { headers: { 'X-AskNews-Key': 'reader-key' } }));
   expect(response.headers.get('cache-control')).toBe('private, no-store');
   expect((await response.json()).news).toContainEqual(article);
