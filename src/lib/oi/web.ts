@@ -433,16 +433,14 @@ export async function researchWeb(plan: ResearchPlan, question: string, limit: n
     Promise.all(plan.markets.slice(0, 3).map(q => searchMarkets(q, deps.api, signal).catch(() => []))),
   ]);
 
-  const privateResearch = await asknews;
+  const picked = pickArticles([room, gdelt, events], limit + 4);
+  const reading = each(picked, 4, a => readArticle(a, words, deps, signal));
+  const [privateResearch, read] = await Promise.all([asknews, reading]);
   const privateArticles: ContextItem[] = (privateResearch?.outputs ?? []).flatMap(out => out.articles).map(a => ({
     id: '', kind: 'web', provenance: 'asknews', title: a.title, source: `${a.source} via AskNews`, published: a.published,
     place: a.place?.name ?? '', lat: a.coords?.[0] ?? null, lng: a.coords?.[1] ?? null,
     url: a.link, excerpt: a.key_points.join(' ').slice(0, 520),
   }));
-  const privateUrls = new Set(privateArticles.map(a => safeNewsUrl(a.url)).filter(Boolean));
-  // Duplicate AskNews reporting must not be scraped or lose its paraphrase provenance.
-  const picked = pickArticles([room, gdelt, events].map(list => list.filter(a => !privateUrls.has(safeNewsUrl(a.url)))), limit + 4);
-  const read = await each(picked, 4, a => readArticle(a, words, deps, signal));
   const excerptOf = (i: number) => read[i]?.excerpt || picked[i].summary || '';
   const ranked = picked.map((a, i) => ({ a, r: read[i], excerpt: excerptOf(i) }))
     .sort((x, y) => Number(Boolean(y.r?.excerpt)) - Number(Boolean(x.r?.excerpt)) || Number(Boolean(y.excerpt)) - Number(Boolean(x.excerpt)));
@@ -460,10 +458,12 @@ export async function researchWeb(plan: ResearchPlan, question: string, limit: n
     url: a.url,
     ...(excerpt ? { excerpt } : {}),
   }));
+  const privateUrls = new Set(privateArticles.map(a => safeNewsUrl(a.url)).filter(Boolean));
+  const publicOnly = publicArticles.filter(a => !privateUrls.has(safeNewsUrl(a.url)));
   const items: ContextItem[] = [];
   const reportingUrls = new Set<string>();
-  for (let i = 0; i < Math.max(privateArticles.length, publicArticles.length) && items.length < limit; i++) {
-    for (const a of [privateArticles[i], publicArticles[i]]) {
+  for (let i = 0; i < Math.max(privateArticles.length, publicOnly.length) && items.length < limit; i++) {
+    for (const a of [privateArticles[i], publicOnly[i]]) {
       if (!a || items.length >= limit) continue;
       const url = safeNewsUrl(a.url);
       if (!url || reportingUrls.has(url)) continue;

@@ -8,6 +8,7 @@ import type { AskNewsArticle, AskNewsStatus } from '@/lib/asknews/domain';
 /**
  * OSIRIS — Region Dossier API
  * Provides country intelligence for any coordinate (double right-click on map)
+ * Fix #115: Steps 2-4 now run in parallel via Promise.allSettled
  */
 
 /*
@@ -179,12 +180,12 @@ async function readCountry(countryName: string): Promise<CountryFacts[]> {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const lat = Number(searchParams.get('lat'));
-  const lng = Number(searchParams.get('lng'));
   const includeAskNews = searchParams.get('asknews') === '1';
+  const lat = includeAskNews ? Number(searchParams.get('lat')) : parseFloat(searchParams.get('lat') || '0');
+  const lng = includeAskNews ? Number(searchParams.get('lng')) : parseFloat(searchParams.get('lng') || '0');
   const privateHeaders = { 'Cache-Control': 'private, no-store' };
-  if (!searchParams.get('lat')?.trim() || !searchParams.get('lng')?.trim()
-    || !Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180) {
+  if (includeAskNews && (!searchParams.get('lat')?.trim() || !searchParams.get('lng')?.trim()
+    || !Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180)) {
     return NextResponse.json({ error: 'Invalid coordinates' }, { status: 400, headers: privateHeaders });
   }
   const nearby: Promise<{ status: AskNewsStatus; articles: AskNewsArticle[] } | undefined> = includeAskNews
@@ -194,7 +195,9 @@ export async function GET(request: Request) {
     : Promise.resolve(undefined);
 
   try {
-    const place = await placeAt(lat, lng).catch(() => null);
+    // Step 1: Which place was clicked (must complete first — other steps depend on it).
+    const naming = placeAt(lat, lng);
+    const place = await (includeAskNews ? naming.catch(() => null) : naming);
 
     let countryName = '';
     let countryCode = '';
@@ -214,8 +217,10 @@ export async function GET(request: Request) {
       };
     }
 
+    // Steps 2-3: Run in PARALLEL after geocode
     const [wikiResult, wdResult] = await Promise.allSettled([
 
+      // Step 2: Fetch Wikipedia summary
       (async () => {
         const wikiQuery = locationInfo.city || countryName;
         if (!wikiQuery) return null;
@@ -236,6 +241,8 @@ export async function GET(request: Request) {
         return null;
       })(),
 
+      /* Step 3: Country facts and head of state. Cached for a day per country,
+         which also keeps a burst of right-clicks off Wikidata. */
       countryName
         ? cachedSource<CountryFacts>(`dossier:wd:${countryName}`, () => readCountry(countryName), WD_TTL_MS)()
             .then(rows => rows[0] ?? null)
@@ -270,7 +277,8 @@ export async function GET(request: Request) {
           : 'no-store',
       },
     });
-  } catch {
+  } catch (error) {
+    console.error('Region dossier error:', error);
     const asknews = await nearby;
     return NextResponse.json({ error: 'Failed to fetch region data', ...(asknews ? { asknews } : {}) }, { status: 500, headers: includeAskNews ? privateHeaders : { 'Cache-Control': 'no-store' } });
   }

@@ -110,7 +110,7 @@ describe('private nearby dossier composition', () => {
   beforeEach(() => { httpJson.mockReset(); vi.stubEnv('ASKNEWS_API_KEY', 'operator-key'); });
   afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-  it.each(['', '?lat=NaN&lng=0&asknews=1', '?lat=91&lng=0&asknews=1', '?lat=0&lng=180.1&asknews=1', '?lat=12junk&lng=0&asknews=1'])('rejects invalid coordinates before any upstream work (%s)', async query => {
+  it.each(['?asknews=1', '?lat=NaN&lng=0&asknews=1', '?lat=91&lng=0&asknews=1', '?lat=0&lng=180.1&asknews=1', '?lat=12junk&lng=0&asknews=1'])('rejects invalid coordinates before any upstream work (%s)', async query => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     const response = await GET(new Request(`http://localhost/api/region-dossier${query}`));
     expect(response.status).toBe(400);
@@ -164,4 +164,12 @@ describe('private nearby dossier composition', () => {
     expect((await missing.json()).asknews.status).toBe('missing-key');
     expect(missing.headers.get('cache-control')).toBe('private, no-store');
   });
+});
+
+it('preserves default coordinates for ordinary dossier callers', async () => {
+  httpJson.mockReset().mockResolvedValue({ features: [] });
+  const response = await GET(new Request('http://localhost/api/region-dossier'));
+  expect(response.status).toBe(200);
+  expect((await response.json()).coordinates).toEqual({ lat: 0, lng: 0 });
+  expect(httpJson).toHaveBeenCalled();
 });
