@@ -96,7 +96,7 @@ export function wholeData(seed: string): ContextItem {
  */
 export function sourceTexts(items: ContextItem[], panelData = ''): Map<string, string> {
   const out = new Map<string, string>();
-  for (const c of items) out.set(c.id, c.id === DATA_ID ? panelData : c.kind === 'data' ? c.title : [c.title, c.excerpt, c.source].filter(Boolean).join(' '));
+  for (const c of items) out.set(c.id, c.provenance === 'asknews' ? '' : c.id === DATA_ID ? panelData : c.kind === 'data' ? c.title : [c.title, c.excerpt, c.source].filter(Boolean).join(' '));
   return out;
 }
 

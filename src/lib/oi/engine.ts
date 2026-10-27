@@ -37,6 +37,9 @@
  * Everything is announced as events (see ./types), which is how the globe
  * draws the analysis while it happens.
  */
+import { AskNewsError } from '../asknews';
+import { ASKNEWS_STATUS } from '../asknews/domain';
+import type { AskNewsOperations } from '../asknews/mcp-domain';
 import { roundStatFor } from './aggregate';
 import { backtest, baseline, chanceOf, demean, fanOf, logReturns, priceText, pricedWorlds, recent, seedOf, seriesStats, tradingDays, worldCourses, type Series } from './quant';
 import { DEPTHS, PANEL_SEED_MAX, estimateCalls, type SeedScope } from './depths';
@@ -49,7 +52,7 @@ import {
 } from './prompts';
 import { ProviderError, type ChatFn, type ChatRequest } from './providers';
 import { dataExcerpts, sourceTexts, wholeData } from './sources';
-import { parsePlan, researchWeb, type Research, type ResearchPlan } from './web';
+import { parsePlan, researchWeb, type AskNewsResearch, type Research, type ResearchPlan } from './web';
 import type { RunState } from './state';
 import type { ContextItem, Depth, Frame, Link, Move, OiEvent, Period, Quant, RoundStat, SimEvent, Usage, WorldPoint } from './types';
 
@@ -68,6 +71,7 @@ export interface EngineInput {
 }
 
 export interface EngineDeps {
+  asknews?: AskNewsOperations;
   chat: ChatFn;
   /** Model calls in flight at once. */
   concurrency: number;
@@ -77,7 +81,7 @@ export interface EngineDeps {
   takeInjects: () => string[];
   gather?: (question: string, seed: string, limit: number) => Promise<ContextItem[]>;
   /** The open-web research; tests pass their own. */
-  research?: (plan: ResearchPlan, question: string, limit: number, signal: AbortSignal) => Promise<Research>;
+  research?: (plan: ResearchPlan, question: string, limit: number, signal: AbortSignal, asknews?: Promise<AskNewsResearch>) => Promise<Research>;
   /** Looking through live cameras at the places the plan named; tests pass their own. */
   cameras?: (places: string[], signal: AbortSignal) => Promise<ContextItem[]>;
   today?: string;
@@ -172,19 +176,30 @@ export async function runEngine(input: EngineInput, deps: EngineDeps): Promise<v
   if (input.useFeeds) {
     const feeds = (deps.gather ?? gatherContext)(input.question, input.seed, depth.feed).catch(() => [] as ContextItem[]);
     // The model plans the research; whatever it leaves out, the question's own names and words fill in.
-    const planned = await s.json({ user: researchPrompt(input.question, input.seed, today), maxTokens: 500, temperature: 0.2, timeoutMs: 60_000 })
+    const warnAskNews = (error: unknown) => s.emit({ t: 'warn', message: error instanceof AskNewsError ? ASKNEWS_STATUS[error.code] : ASKNEWS_STATUS.unavailable });
+    const catalog = deps.asknews ? await deps.asknews.tools(s.signal).catch(error => { warnAskNews(error); return []; }) : [];
+    const planned = await s.json({ user: researchPrompt(input.question, input.seed, today, catalog), maxTokens: catalog.length ? 2000 : 500, temperature: 0.2, timeoutMs: 60_000 })
       .catch(err => { if (err instanceof FatalError) throw err; return null; });
     s.check();
-    const plan = parsePlan(planned, input.question);
-    const research = deps.research ?? researchWeb;
+    const plan = parsePlan(planned, input.question, catalog);
+    const asknewsSignal = AbortSignal.any([s.signal, AbortSignal.timeout(180_000)]);
+    const gate = limiter(2);
+    const asknews = Promise.all((plan.asknews ?? []).map(call => gate(async () => {
+      try {
+        if (asknewsSignal.aborted) throw new AskNewsError(s.signal.aborted ? 'cancelled' : 'timeout');
+        return await deps.asknews!.call(call, asknewsSignal);
+      } catch (error) { warnAskNews(error); return null; }
+    }))).then(outputs => ({ outputs: outputs.filter((out): out is NonNullable<typeof out> => out !== null) }));
+    const research = deps.research ?? ((plan, question, limit, signal, asknews) => researchWeb(plan, question, limit, signal, undefined, asknews));
     // Cameras, when the question turns on what they show, alongside the reading rather than after it.
     const looking = plan.cameras.length
       ? (deps.cameras ?? lookThroughCameras)(plan.cameras, s.signal).catch(() => [] as ContextItem[])
       : Promise.resolve([] as ContextItem[]);
     const [found, feed, seen] = await Promise.all([
-      research(plan, input.question, depth.research, s.signal).catch(() => ({ items: [], series: [] }) as Research),
+      research(plan, input.question, depth.research, s.signal, asknews).catch(() => ({ items: [], series: [] }) as Research),
       feeds,
       looking,
+      asknews,
     ]);
     series = found.series;
     // The live feed only where it is about the question: a headline about something else is no evidence.

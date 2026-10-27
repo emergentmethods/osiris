@@ -9,12 +9,14 @@
  */
 import { terms } from './words';
 import { text } from './parse';
+import { validAskNewsCall, type AskNewsCall, type AskNewsTool } from '../asknews/mcp-domain';
 
 export const DESKS = ['world', 'politics', 'business', 'markets', 'crypto', 'tech', 'energy', 'defense', 'health', 'science', 'climate', 'sports'] as const;
 export type Desk = typeof DESKS[number];
 
 /** What to read: news coverage, the desks it comes from, market prices, prediction markets, and background. */
 export interface ResearchPlan {
+  asknews?: AskNewsCall[];
   news: string[];
   background: string[];
   /** The newsroom desks that cover the question. */
@@ -117,7 +119,7 @@ export function planFallback(question: string): ResearchPlan {
 }
 
 /** The model's plan, cleaned: whatever it left out or got wrong, the question's own words fill in. */
-export function parsePlan(raw: Record<string, unknown> | null, question: string): ResearchPlan {
+export function parsePlan(raw: Record<string, unknown> | null, question: string, catalog: readonly AskNewsTool[] = []): ResearchPlan {
   const take = (v: unknown, n: number, max = 80) => (Array.isArray(v) ? v : []).map(x => text(x, max)).filter(Boolean).slice(0, n);
   const fallback = planFallback(question);
   const news = take(raw?.news ?? raw?.searches, 2).map(searchWords).filter(q => q.length >= 3);
@@ -126,6 +128,7 @@ export function parsePlan(raw: Record<string, unknown> | null, question: string)
   const instruments = [...new Set(take(raw?.instruments ?? raw?.tickers, 6, 20).map(s => s.trim()).filter(s => SYMBOL.test(s)))].slice(0, 2);
   const markets = take(raw?.markets, 2).map(searchWords).filter(q => q.length >= 3);
   return {
+    asknews: Array.isArray(raw?.asknews) ? raw.asknews.filter(v => validAskNewsCall(v, catalog)).slice(0, 4) : [],
     news: news.length ? news : fallback.news,
     background: background.length ? background : fallback.background,
     // The model's desks, and the ones the question's own words point to: a desk too many costs a feed read, one too few the story.

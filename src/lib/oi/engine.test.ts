@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DEPTHS, askRun, estimateCalls, limiter, pooled, runEngine, type EngineDeps } from './engine';
 import { PANEL_SEED_MAX, SEED_MAX, seedCost, simulationCalls } from './depths';
 import { createDemoChat } from './demo';
@@ -380,4 +380,84 @@ describe('seedCost', () => {
     const q = DEPTHS.quick;
     expect(seedCost(SEED_MAX * 2, 'quick', 'panel').tokens).toBe(SEED_MAX / 4 + (PANEL_SEED_MAX / 4) * (1 + q.worlds * q.periods * q.actors));
   });
+});
+
+describe('Forecast AskNews selection', () => {
+  it('shows the runtime catalog in the existing planner and runs four calls at concurrency two with independent warnings', async () => {
+    const demo = createDemoChat();
+    const h = harness(async req => req.user.includes('Plan the research')
+      ? { text: JSON.stringify({ asknews: Array.from({ length: 6 }, (_, i) => ({ tool: 'CaseOnly', args: { i } })) }), input: 1, output: 1 }
+      : demo(req));
+    let active = 0, peak = 0;
+    const calls: number[] = [];
+    h.deps.asknews = {
+      tools: async () => [{ name: 'CaseOnly', description: 'Fixture catalog', inputSchema: { type: 'object' } }],
+      scrub: s => s,
+      call: async ({ args }, signal) => {
+        expect(signal?.aborted).toBe(false);
+        calls.push(Number(args.i)); peak = Math.max(peak, ++active);
+        await new Promise(r => setTimeout(r, 5)); active--;
+        if (args.i === 1) throw new Error('untrusted exception must never appear');
+        return { articles: [], notes: [{ kind: 'synthesis', title: 'AskNews DeepNews synthesis', text: `Synthesis ${args.i}` }] };
+      },
+    };
+    h.deps.research = async (_plan, _question, _limit, _signal, asknews) => {
+      const result = await asknews!;
+      expect(result.outputs).toHaveLength(3);
+      return { items: WEB, series: [] };
+    };
+    await runEngine({ question: Q, seed: '', depth: 'quick', useFeeds: true }, h.deps);
+    expect(calls).toEqual([0, 1, 2, 3]);
+    expect(peak).toBe(2);
+    expect(h.prompts.filter(p => p.includes('Plan the research'))).toHaveLength(1);
+    expect(h.prompts[0]).toContain('CaseOnly');
+    expect(h.prompts[0]).toContain('untrusted');
+    expect(h.events.filter(e => e.t === 'warn')).toHaveLength(1);
+    expect(JSON.stringify(h.events)).not.toContain('untrusted exception');
+    expect(fold(h.events).report).not.toBeNull();
+  });
+
+  it('makes zero paid calls when absent, malformed, unselected, or feeds are off', async () => {
+    for (const [useFeeds, selected] of [[true, undefined], [true, 'wrong'], [true, [{ tool: 'unknown', args: {} }]], [false, [{ tool: 'CaseOnly', args: {} }]]] as const) {
+      const demo = createDemoChat();
+      const h = harness(req => req.user.includes('Plan the research') ? Promise.resolve({ text: JSON.stringify({ asknews: selected }), input: 1, output: 1 }) : demo(req));
+      let discoveries = 0, paid = 0;
+      h.deps.asknews = { tools: async () => { discoveries++; return [{ name: 'CaseOnly', description: '', inputSchema: {} }]; }, call: async () => { paid++; return { articles: [], notes: [] }; }, scrub: s => s };
+      await runEngine({ question: Q, seed: '', depth: 'quick', useFeeds }, h.deps);
+      expect(paid).toBe(0);
+      expect(discoveries).toBe(useFeeds ? 1 : 0);
+    }
+  });
+});
+
+it('honors cancellation and the 180-second total budget without starting queued paid calls or retrying', async () => {
+  for (const cancel of [false, true]) {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms);
+      return controller.signal;
+    });
+    try {
+      const demo = createDemoChat();
+      const h = harness(req => req.user.includes('Plan the research') ? Promise.resolve({ text: JSON.stringify({ asknews: Array(4).fill({ tool: 'Bounded', args: {} }) }), input: 1, output: 1 }) : demo(req));
+      const ctrl = new AbortController(); h.deps.signal = ctrl.signal;
+      let paid = 0;
+      h.deps.asknews = {
+        tools: async () => [{ name: 'Bounded', description: '', inputSchema: {} }], scrub: s => s,
+        call: (_call, signal) => { paid++; return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(new Error('unsafe upstream text')), { once: true })); },
+      };
+      h.deps.research = async (_p, _q, _n, _s, asknews) => { await asknews; return { items: WEB, series: [] }; };
+      const running = runEngine({ question: Q, seed: '', depth: 'quick', useFeeds: true }, h.deps);
+      const outcome = running.then(() => 'done', () => 'cancelled');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(paid).toBe(2);
+      if (cancel) ctrl.abort();
+      else await vi.advanceTimersByTimeAsync(180_000);
+      expect(await outcome).toBe(cancel ? 'cancelled' : 'done');
+      expect(paid).toBe(2);
+      expect(h.events.filter(e => e.t === 'warn')).toHaveLength(4);
+      expect(JSON.stringify(h.events)).not.toContain('unsafe upstream text');
+    } finally { timeout.mockRestore(); vi.useRealTimers(); }
+  }
 });
