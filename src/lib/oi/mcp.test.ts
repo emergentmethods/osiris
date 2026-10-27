@@ -99,3 +99,53 @@ describe('the tools', () => {
     expect(JSON.stringify(r)).not.toContain('sk-test');
   });
 });
+
+it('keeps oi_predict arguments credential-free', () => {
+  const predict = TOOLS.find(tool => tool.name === 'oi_predict')!;
+  expect(Object.keys(predict.inputSchema.properties)).toEqual(['question', 'context', 'context_scope', 'depth', 'use_live_feeds', 'wait_seconds']);
+  expect(predict.inputSchema.additionalProperties).toBe(false);
+});
+
+it('returns a run handle within the wait limit and keeps launched research alive after disconnect', async () => {
+  const { credentials } = await import('./service');
+  const { waitForEnd } = await import('./runs');
+  const { vi } = await import('vitest');
+  const demo = createDemoChat();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let researchSignal: AbortSignal | undefined;
+  let researchStarted!: () => void;
+  const ready = new Promise<void>(resolve => { researchStarted = resolve; });
+  const creds = credentials(new Request('http://localhost/api/mcp', { headers: { 'X-OI-Provider': 'demo', 'X-AskNews-Key': 'offline-inbound-reader' } }));
+  if ('error' in creds) throw new Error(creds.error);
+  const catalog = [{ name: 'InboundOddTool', description: 'Offline reporting', inputSchema: { type: 'object' as const } }];
+  creds.asknews = { tools: async () => catalog, call: async (_call, signal) => {
+    researchSignal = signal; researchStarted(); await gate;
+    return { articles: [], notes: [] };
+  }, scrub: value => value };
+  const disconnect = new AbortController();
+  const context = ctx({ creds, signal: disconnect.signal, maxWaitSeconds: 80, deps: {
+    chat: async req => req.user.includes('Plan the research') ? { text: JSON.stringify({ asknews: [{ tool: 'InboundOddTool', args: {} }] }), input: 0, output: 0 } : demo(req),
+    gather: async () => [],
+    research: async (_question, _depth, _chat, _signal, asknews) => { await asknews; return { items: [], series: [] }; },
+  } });
+  vi.useFakeTimers();
+  try {
+    const pending = handleMessage(call('oi_predict', { question: 'Will the envoys sign a deal by year end?', depth: 'quick', wait_seconds: 280 }), context);
+    await ready;
+    await vi.advanceTimersByTimeAsync(80_000);
+    const response = await pending;
+    const data = (response?.result as { structuredContent: { id: string; status: string; run_token: string } }).structuredContent;
+    expect(data).toMatchObject({ status: 'running' });
+    expect(data.id).toMatch(/^[a-f0-9-]{36}$/);
+    expect(data.run_token).toBeTruthy();
+    disconnect.abort();
+    expect(researchSignal?.aborted).toBe(false);
+    release();
+    vi.useRealTimers();
+    const run = getRun(data.id)!;
+    await waitForEnd(run, 1000);
+    expect(run.state.status, run.state.message).toBe('done');
+    expect(JSON.stringify({ state: run.state, events: run.events, response })).not.toContain('offline-inbound-reader');
+  } finally { release(); vi.useRealTimers(); }
+});
