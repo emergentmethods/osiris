@@ -13,7 +13,7 @@ export function projectArticle(value: unknown, key: string): AskNewsArticle | nu
   const source = text(row.source_name || row.source || row.domain_url || new URL(link).hostname, 200);
   const date = row.pub_date ?? row.publication_date ?? row.published;
   const published = typeof date === 'string' && Number.isFinite(Date.parse(date)) ? new Date(date).toISOString() : '';
-  const points = Array.isArray(row.key_points) ? row.key_points : [row.summary];
+  const points = Array.isArray(row.key_points) ? row.key_points : [];
   let place: AskNewsArticle['place'] = null;
   let coords: AskNewsArticle['coords'] = null;
   const geo = object(row.geo_coordinates);

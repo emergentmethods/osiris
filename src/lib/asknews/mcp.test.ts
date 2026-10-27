@@ -89,7 +89,7 @@ describe('request-owned MCP operations through real HTTP', () => {
     result = { content: [{ type: 'text', text: JSON.stringify({ overview: key + 'z'.repeat(5000), sources: [{ title: 'Reporting', url: 'https://publisher.test/a', summary: 's'.repeat(700), geo_coordinates: { Berlin: { latitude: 52, longitude: 13 } } }] }) }] };
     const output = await mcpOperations(key, { url }).call({ tool: tool.name, args: {} });
     expect(output.articles[0]).toMatchObject({ published: '', coords: [52, 13], place: { name: 'Berlin', precision: 'mentioned-place' } });
-    expect(output.articles[0].key_points[0]).toHaveLength(520);
+    expect(output.articles[0].key_points).toEqual([]);
     expect(output.notes[0]).toMatchObject({ kind: 'synthesis', title: 'AskNews DeepNews synthesis' });
     expect(output.notes[0].text).toHaveLength(4000);
     expect(output.notes[0].text).toContain('[redacted]');
