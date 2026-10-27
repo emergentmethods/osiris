@@ -28,7 +28,7 @@ import { canSpeak, useDictation } from './voice';
 
 const TOOL_ICON: Record<ToolName, typeof Navigation> = {
   go_to: Navigation, layers: Layers, find: Search, scan: ScanSearch, camera: Cctv, highlight: MapPin, show: List, markets: TrendingUp,
-  open: PanelRight, map_view: Globe2, recon: Radar, forecast: Orbit, workspace: LayoutDashboard, select: MousePointerClick, clear: Eraser,
+  open: PanelRight, map_view: Globe2, recon: Radar, forecast: Orbit, workspace: LayoutDashboard, select: MousePointerClick, clear: Eraser, asknews: Search,
 };
 
 function ToolIcon({ tool, ...rest }: LucideProps & { tool: ToolName }) {
@@ -59,6 +59,7 @@ const HANDOFF = 'Will OPEC+ announce a production cut before December 2026?';
 function describe(a: ActionView): string {
   const g = (k: string) => (typeof a.args[k] === 'string' || typeof a.args[k] === 'number' ? String(a.args[k]) : '');
   switch (a.tool) {
+    case 'asknews': return `AskNews ${g('tool')}`;
     case 'go_to': return `Fly to ${g('place') || [g('lat'), g('lng')].filter(Boolean).join(', ') || 'a place'}`;
     case 'layers': return `Layers ${[Array.isArray(a.args.on) ? `on: ${(a.args.on as string[]).join(', ')}` : '', Array.isArray(a.args.off) ? `off: ${(a.args.off as string[]).join(', ')}` : ''].filter(Boolean).join(' · ')}`;
     case 'find': return `Find ${g('layer').replace('_', ' ')}${g('text') ? ` “${g('text')}”` : ''}${typeof a.args.near === 'string' ? ` near ${a.args.near}` : ''}`;
@@ -181,6 +182,15 @@ function CardView({ card, oi, onLocate, onOpenForecast, onWorkspace }: {
               {it.value && <span className="text-[11px] font-mono tabular-nums whitespace-pre flex-shrink-0" style={{ color: it.tone === 'up' ? T.green : it.tone === 'down' ? T.red : T.text }}>{it.value}</span>}
               {placed && <LocateFixed className="w-3 h-3 flex-shrink-0 text-[var(--text-muted)] group-hover:text-[var(--cyan-primary)]" />}
             </>
+          );
+          if (card.kind === 'asknews') return (
+            <div key={i} className="flex flex-col gap-1 px-3 py-2">
+              <div className="flex items-center gap-2">{body}</div>
+              <div className="flex gap-3 text-[11px] text-[var(--cyan-primary)]">
+                {placed && <button onClick={() => onLocate(it.lat!, it.lng!, 8)} title="Locate place mentioned">Locate place mentioned</button>}
+                {it.url && <a href={it.url} target="_blank" rel="noopener noreferrer">Original source ↗</a>}
+              </div>
+            </div>
           );
           return placed ? (
             <button key={i} onClick={() => onLocate(it.lat!, it.lng!, card.kind === 'place' ? undefined : card.kind === 'camera' ? 14 : 8)} title="Fly there"
