@@ -110,6 +110,20 @@ Osiris is a production-grade OSINT platform that provides situational awareness 
 - **Your own key**: OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, DeepSeek, xAI, Mistral or Qwen. Kept in your browser, sent per request in a header, never stored on the server.
 - **REST API** under `/api/oi` with live Server-Sent Events, and an **MCP server** at `/api/mcp` so agents such as Hermes, Claude and Cursor can run predictions, steer them and read OSIRIS intelligence. See [the docs](https://osirisai.live/docs#oi).
 
+### AskNews reporting and OI research
+
+AskNews is optional and defaults off. Turn on **AskNews** in the layer panel to enter a key. Save uses sessionStorage, or localStorage when **Remember** is selected. **Forget** clears both. Saving a key does not enable the source. Turning the source off removes its feed items, mentioned-place pins, and nearby dossier reporting without deleting the key used by explicit OI requests.
+
+Intel Feed and desktop LiveAlerts show titles, publisher names, publication times, key points, and original links labelled "via AskNews". Pins say "place mentioned", not a verified incident location. Region Dossier searches within 50,000 meters over 24 hours for up to 10 items. AskNews images and full text are excluded.
+
+The feed uses `time_filter=pub_date`, the last 30 minutes through `start_timestamp=now-1800`, `page_rank=200000`, geo data, included podcasts, and no category filter. Its 200 items require two searches of 100 items at offsets 0 and 100. Every five-minute visible-tab poll costs two searches per reader at those defaults. Manual refresh also searches. The environment overrides below can reduce the window or item count.
+
+Assist discovers the live AskNews MCP catalog and lets the model choose `asknews {tool,args}` actions. Forecast's existing planner can select zero to four calls, executed two at a time when live research is enabled. Neither feature forces a paid call or DeepNews. Calls use the key owner's included usage or wallet at AskNews rates, so Forecast has no fixed AskNews price. Reporting retains "via AskNews" attribution. Generated overviews say "AskNews DeepNews synthesis". All AskNews-derived quotations are Paraphrase, even when wording matches a headline or key point.
+
+For `/api/news?asknews=1`, `/api/region-dossier?lat=52.52&lng=13.405&asknews=1`, `/api/asknews`, `/api/oi/assist`, `/api/oi/runs`, and `/api/mcp`, send `X-AskNews-Key`. The header takes precedence over the server's `ASKNEWS_API_KEY` fallback. An invalid or empty supplied header never falls back. Keys belong in headers, never tool arguments. AskNews dashboard, Assist, action, and inbound MCP responses are private and no-store. Forecast results remain shareable with anyone holding the run id, including their projected research. Do not use a run for confidential material.
+
+Osiris's stateless `/api/mcp` reads the header on every POST alongside `X-OI-Provider`, `X-OI-Key`, and optional `X-OI-Model`. Configure your MCP client to send it on every request. `oi_predict` arguments are unchanged. A slow run returns its handle after at most 80 seconds over JSON or 280 seconds over SSE. Poll `oi_get_run` for completion. Disconnecting does not cancel a launched run. `oi_cancel` with the run token does.
+
 ### Texas CCTV
 Public TxDOT ITS snapshots are integrated with the existing camera markers, preview grid and viewer. Use `/api/cctv?region=texas` for Texas only; global and Texas location queries include the same source. District inventories are cached independently, with stale data retained during outages. Availability varies by district and camera; these are refreshing JPEG snapshots, not video streams.
 
@@ -180,7 +194,7 @@ Open [http://localhost:3000](http://localhost:3000)
 ```bash
 git clone https://github.com/simplifaisoul/osiris.git
 cd osiris
-cp .env.template .env     # optional — configure keys / port
+cp .env.example .env     # optional — configure keys / port
 docker compose up -d
 ```
 
@@ -201,17 +215,32 @@ docker run -d -p 3000:3000 --env-file .env ghcr.io/simplifaisoul/osiris:latest
 `.env` to change the published host port (e.g. `OSIRIS_PORT=3005`) without
 editing the compose file.
 
+### AskNews self-hosting
+
+Leave `ASKNEWS_API_KEY` unset to require each reader's own key. If you set it, it is the fallback for feed, dossier, Assist discovery and action calls, Forecast, and inbound `/api/mcp`. A reader's `X-AskNews-Key` always takes precedence. On a public instance, any visitor can spend the operator's credits through model-chosen calls. Restrict access before enabling the fallback.
+
+| Variable | Default | Accepted values |
+| --- | --- | --- |
+| `ASKNEWS_API_KEY` | Unset | Operator fallback key |
+| `ASKNEWS_FEED_WINDOW_SECONDS` | `1800` | Integer from 1 to 604800 |
+| `ASKNEWS_FEED_PAGE_RANK` | `200000` | Integer from 0 to 1000000000 |
+| `ASKNEWS_FEED_SIZE` | `200` | Integer from 1 to 200, in pages of at most 100 |
+| `ASKNEWS_API_BASE_URL` | `https://api.asknews.app` | Trusted REST endpoint override |
+| `ASKNEWS_MCP_URL` | `https://mcp.asknews.app/` | Trusted MCP endpoint override |
+
+Invalid numeric overrides use the defaults. Endpoint overrides receive the selected credential. Set them only to servers you trust. REST search has a 15-second deadline. MCP discovery has 10 seconds, each call has 90 seconds, and Forecast AskNews research has 180 seconds total, bounded by cancellation and the remaining run deadline. The action route declares a 120-second duration. Verify your host supports that duration and redacts credential headers from proxy and access logs before a public rollout. No AskNews catalogs, MCP sessions, or reader results are cached globally.
+
 ### Environment Variables
 
 OSIRIS works **partially without any API keys** — all core feeds use public,
-keyless sources. Copy [`.env.template`](.env.template) to `.env` and set only
+keyless sources. Copy [`.env.example`](.env.example) to `.env` and set only
 what you need:
 
 ```env
 # Published host port (container always listens on 3000). Default: 3000
 OSIRIS_PORT=3000
 
-# RECON scanner backend (the only vars the current code reads).
+# RECON scanner backend.
 # SCANNER_KEY must match the backend's OSIRIS_KEY — generate with: openssl rand -hex 32
 SCANNER_URL=
 SCANNER_KEY=

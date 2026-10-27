@@ -510,6 +510,46 @@ docker compose up -d`}</Pre>
               it runs, it draws itself on the globe as arcs through the sky; every arc and point can be clicked to open
               exactly that piece of the research, and the camera follows the run until you take it.
             </p>
+            <p>
+              <strong>AskNews</strong> is an optional source, off by default. Its layer toggle opens key entry.
+              Save keeps the key in sessionStorage, or localStorage with Remember. Forget clears both. Source-off
+              removes private feed items, pins, and nearby reporting without erasing the key for explicit OI requests.
+              Intel Feed, LiveAlerts, and Region Dossier show titles, publisher, time, key points, and original links
+              labelled &quot;via AskNews&quot;, with no AskNews images or full text. Pins mean &quot;place mentioned&quot;.
+            </p>
+            <p>
+              The feed defaults to <Code>time_filter=pub_date</Code>, the last 30 minutes through{' '}
+              <Code>start_timestamp=now-1800</Code>, <Code>page_rank=200000</Code>, geo data, included podcasts,
+              and no category filter. It requests 200 items as two pages of 100 at offsets 0 and 100. Each five-minute
+              visible-tab poll costs two searches per reader at these defaults. Manual refresh also searches.
+              Self-hosters can override <Code>ASKNEWS_FEED_WINDOW_SECONDS=1800</Code>,{' '}
+              <Code>ASKNEWS_FEED_PAGE_RANK=200000</Code>, and <Code>ASKNEWS_FEED_SIZE=200</Code>.
+              Nearby reporting uses 50,000 meters, 24 hours, and 10 items, independently of country facts.
+            </p>
+            <p>
+              Assist discovers the AskNews MCP catalog and lets the model select <Code>asknews {'{tool,args}'}</Code>.
+              Forecast&apos;s existing planner can select zero to four calls, two concurrent, with live research enabled.
+              Neither forces a paid call or DeepNews. Calls consume the key owner&apos;s included usage or wallet at
+              AskNews rates. AskNews-derived quotations always remain Paraphrase, including matching headlines and
+              key points. Generated overviews say &quot;AskNews DeepNews synthesis&quot;.
+            </p>
+            <Callout tone="info" title="AskNews credentials and self-hosting">
+              Send <Code>X-AskNews-Key</Code> on news, dossier, Assist, <Code>/api/asknews</Code>, Forecast start,
+              and every <Code>/api/mcp</Code> POST. The header takes precedence over <Code>ASKNEWS_API_KEY</Code>,
+              the fallback for every route. Invalid or empty supplied headers never fall back. On a public instance,
+              any visitor can spend the operator&apos;s credits through model-chosen calls. Restrict access before enabling
+              the fallback. AskNews dashboard, Assist, action, and MCP responses are private, no-store. Forecast research
+              remains shareable with anyone holding the run id. Keys never belong in tool arguments.
+            </Callout>
+            <p>
+              Trusted endpoint overrides are <Code>ASKNEWS_API_BASE_URL</Code>, default{' '}
+              <Code>https://api.asknews.app</Code>, and <Code>ASKNEWS_MCP_URL</Code>, default{' '}
+              <Code>https://mcp.asknews.app/</Code>. Overrides receive the selected credential. Search has a 15-second
+              deadline. MCP discovery has 10 seconds, a call 90 seconds, and Forecast AskNews research 180 seconds total.
+              Cancellation and the remaining run deadline win. The action route declares 120 seconds. Before hosting,
+              verify the duration limit and credential-header redaction in proxy and access logs. No AskNews catalogs,
+              sessions, or reader results are cached globally. See <Code>.env.example</Code> for configuration.
+            </p>
             <div className="grid sm:grid-cols-2 gap-2.5">
               {[
                 { k: 'Your own key', v: 'OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, DeepSeek, xAI, Mistral or Qwen. The key stays in your browser and travels in a header with your requests; the server uses it for your run and never stores or logs it.' },
@@ -561,7 +601,8 @@ curl -N ${origin}/api/oi/runs/RUN_ID/events`,
               tools <Code>oi_predict</Code>, <Code>oi_get_run</Code>, <Code>oi_ask</Code>,{' '}
               <Code>oi_inject</Code> and <Code>oi_cancel</Code>, plus <Code>osiris_world_brief</Code> and{' '}
               <Code>osiris_markets</Code> and <Code>osiris_trending</Code>, which are free and need no key. The model key is set once on the connection, as
-              headers, so it never appears in the agent&apos;s conversation.
+              headers, so it never appears in the agent&apos;s conversation. Add <Code>X-AskNews-Key</Code> to the same headers
+              on every POST to let <Code>oi_predict</Code> use your AskNews account. Its argument schema is unchanged.
             </p>
             <CodeBlock
               label="Connect an agent"
@@ -607,7 +648,8 @@ mcp_servers:
               A few minutes, depending on depth and provider. <Code>oi_predict</Code> waits for it when the
               client accepts a streamed response, sending progress as each phase and period completes. Over plain JSON it
               waits about 80 seconds, then returns the run id to poll with <Code>oi_get_run</Code> and{' '}
-              <Code>wait_seconds</Code>.
+              <Code>wait_seconds</Code>. SSE waits at most 280 seconds. Disconnecting does not cancel a launched run.
+              Use <Code>oi_cancel</Code> with the run token to stop it.
             </Callout>
             <p className="text-[12px] text-[var(--text-muted)]">
               The method follows{' '}
