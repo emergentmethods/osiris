@@ -23,7 +23,8 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllEnvs(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
 describe('private AskNews action route over real local MCP HTTP', () => {
   it('selects reader and fallback credentials and projects safe output', async () => {
-    for (const headers of [{ 'X-AskNews-Key': 'offline-reader-fixture' }, {}]) {
+    const cases: Record<string, string>[] = [{ 'X-AskNews-Key': 'offline-reader-fixture' }, {}];
+    for (const headers of cases) {
       auth.length = 0;
       const res = await POST(request(undefined, headers));
       expect(res.status).toBe(200);
@@ -35,7 +36,8 @@ describe('private AskNews action route over real local MCP HTTP', () => {
     expect(maxDuration).toBeGreaterThanOrEqual(90);
   });
   it('returns safe private missing-key and empty-header errors without fallback', async () => {
-    for (const headers of [{ 'X-AskNews-Key': '' }, {}]) {
+    const cases: Record<string, string>[] = [{ 'X-AskNews-Key': '' }, {}];
+    for (const headers of cases) {
       if (!('X-AskNews-Key' in headers)) vi.stubEnv('ASKNEWS_API_KEY', '');
       const res = await POST(request(undefined, headers));
       expect(res.status).toBe(401);
