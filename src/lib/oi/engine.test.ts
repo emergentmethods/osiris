@@ -383,6 +383,25 @@ describe('seedCost', () => {
 });
 
 describe('Forecast AskNews selection', () => {
+  it('keeps keyless browser and inbound credentials silent without discovery', async () => {
+    const { credentials } = await import('./service');
+    vi.stubEnv('ASKNEWS_API_KEY', '');
+    const fetch = vi.fn(async () => { throw new Error('Unexpected discovery'); });
+    vi.stubGlobal('fetch', fetch);
+    try {
+      for (const path of ['/api/oi/runs', '/api/mcp']) {
+        const creds = credentials(new Request(`http://localhost${path}`, { headers: { 'X-OI-Provider': 'demo' } }));
+        if ('error' in creds) throw new Error(creds.error);
+        const h = harness(createDemoChat());
+        h.deps.asknews = creds.asknews;
+        await runEngine({ question: Q, seed: '', depth: 'quick', useFeeds: true }, h.deps);
+        expect(h.events.filter(e => e.t === 'warn')).toEqual([]);
+        expect(fold(h.events).report).not.toBeNull();
+      }
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
   it('shows the runtime catalog in the existing planner and runs four calls at concurrency two with independent warnings', async () => {
     const demo = createDemoChat();
     const h = harness(async req => req.user.includes('Plan the research')

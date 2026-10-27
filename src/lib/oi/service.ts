@@ -5,7 +5,7 @@
  * Keys arrive in headers only (X-OI-Key, or Authorization: Bearer), never
  * in a URL or a tool argument, where they would end up in logs and transcripts.
  */
-import { askNewsFor } from '../asknews';
+import { askNewsFor, operatorConfigured } from '../asknews';
 import type { AskNewsOperations } from '../asknews/mcp-domain';
 import { NextResponse } from 'next/server';
 import { getClientIp, isRateLimited } from '@/lib/ssrf-guard';
@@ -86,7 +86,7 @@ export function credentials(req: Request, body: Record<string, unknown> = {}): C
   if (key && !isPlausibleKey(key)) return { error: 'That does not look like an API key.' };
   if (modelRaw && !isPlausibleModel(modelRaw)) return { error: 'That does not look like a model id.' };
   return {
-    asknews: askNewsFor(req.headers),
+    asknews: req.headers.has('X-AskNews-Key') || operatorConfigured() ? askNewsFor(req.headers) : undefined,
     provider: providerRaw ? (providerRaw.toLowerCase() as ProviderId) : undefined,
     key: key || undefined,
     model: modelRaw || undefined,
