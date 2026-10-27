@@ -118,7 +118,7 @@ interface NewsAlert {
   flag: string | null;
   alertKind: AlertKind;
   /** The place the report names, when one resolved; otherwise `anchor` is a country centroid. */
-  place: { name: string; label: string; precision: 'settlement' | 'region' } | null;
+  place: { name: string; label: string; precision: 'settlement' | 'region' | 'mentioned-place' } | null;
   media: { kind: 'photo' | 'video'; thumb: string | null; duration: string | null; video: string | null; count: number } | null;
   forwarded_from: { name: string; url: string | null } | null;
   reply_to: string | null;
@@ -163,7 +163,7 @@ const webUrl = (v: unknown): string | null => {
 };
 const isBloc = (v: unknown): v is Bloc => typeof v === 'string' && Object.hasOwn(BLOCS, v);
 
-function toNews(raw: unknown): NewsAlert | null {
+export function toNews(raw: unknown): NewsAlert | null {
   const a = rec(raw);
   const title = str(a.title);
   const published = str(a.published);
@@ -197,7 +197,7 @@ function toNews(raw: unknown): NewsAlert | null {
     : null;
   const p = rec(a.place);
   const placeName = str(p.name);
-  const place: NewsAlert['place'] = placeName && (p.precision === 'settlement' || p.precision === 'region')
+  const place: NewsAlert['place'] = placeName && (p.precision === 'settlement' || p.precision === 'region' || p.precision === 'mentioned-place')
     ? { name: placeName, label: str(p.label) ?? placeName, precision: p.precision }
     : null;
   const fwd = rec(a.forwarded_from);

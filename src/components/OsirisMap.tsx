@@ -210,6 +210,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  const alertPopupIds = useRef<string[]>([]);
   /* The Live Alert pins currently drawn, and the opener for one of them, so
      the feed's locate button can land on a pin and open it. */
   const alertPinsRef = useRef<AlertPinFeature[]>([]);
@@ -1008,6 +1009,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     // ── POPUP HELPER ──
     const popup = (coords: any, html: string) => {
       popupRef.current?.remove();
+      alertPopupIds.current = [];
       popupRef.current = new maplibregl.Popup({ closeButton: true, maxWidth: '420px', offset: 14 }).setLngLat(coords).setHTML(html).addTo(map);
     };
     const pStyle = `background:rgba(12,14,26,0.95);backdrop-filter:blur(16px);border-radius:10px;padding:16px;font-family:'JetBrains Mono',monospace;`;
@@ -1788,7 +1790,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         </div>
         <div style="color:#F2EFE8;font-family:Inter,system-ui,sans-serif;font-size:12.5px;font-weight:600;line-height:1.35;">${htmlEsc(p.title)}</div>
         <div style="margin-top:6px;font-size:9.5px;color:#8A8880;">${htmlEsc(p.source_name)}${p.via === 'AskNews' ? ' · via AskNews' : ''}${p.lean ? ` · <span style="color:#9B978E;">${htmlEsc(p.lean)}</span>` : ''}</div>
-        <div style="margin-top:6px;font-size:9.5px;color:${c};" title="The place the post names, resolved against OpenStreetMap. Town-level: a post names a place, not an exact spot.">📍 ${htmlEsc(p.place_label)}<span style="color:#5C5A54;"> · ${p.precision === 'region' ? 'region' : 'place'} named in the post · © OpenStreetMap</span></div>
+        <div style="margin-top:6px;font-size:9.5px;color:${c};" title="${p.precision === 'mentioned-place' ? 'A place mentioned in this article, not a verified incident location.' : 'The place the post names, resolved against OpenStreetMap. Town-level: a post names a place, not an exact spot.'}">📍 ${htmlEsc(p.place_label)}<span style="color:#5C5A54;"> · ${p.precision === 'mentioned-place' ? 'place mentioned' : `${p.precision === 'region' ? 'region' : 'place'} named in the post · © OpenStreetMap`}</span></div>
         ${p.via === 'AskNews' ? `<ul style="padding-left:14px;font-size:11px;">${p.key_points.map(point => `<li>${htmlEsc(point)}</li>`).join('')}</ul>` : ''}
         ${media}
         ${link !== '#' ? `<a href="${link}" target="_blank" rel="noopener noreferrer" style="${linkStyle}color:${c};border:1px solid ${c}66;background:${c}1a;">OPEN POST ↗</a>` : ''}
@@ -1812,8 +1814,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     };
     const openAlertPopup = (feature: AlertPinFeature, leadId?: string) => {
       popup(feature.geometry.coordinates, alertPopupHtml(reportsAt(feature.geometry.coordinates, leadId)));
+      alertPopupIds.current = reportsAt(feature.geometry.coordinates, leadId).map(report => report.id);
       markSelected(feature.properties.id);
-      popupRef.current?.once('close', () => markSelected(''));
+      popupRef.current?.once('close', () => { alertPopupIds.current = []; markSelected(''); });
     };
 
     map.on('click', 'alert-pin-dots', e => {
@@ -2311,7 +2314,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     const placed = reports.flatMap((n): { n: PinnedReport; lat: number; lng: number }[] => {
       if (!n?.place || !Array.isArray(n.coords)) return [];
       const [lat, lng] = n.coords;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+      if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180) return [];
       if (shown && !shown.has(n.id)) return [];
       return [{ n, lat, lng }];
     });
@@ -2347,6 +2350,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         duration: n.media?.duration ?? '',
       },
     }));
+    if (alertPopupIds.current.some(id => !reports.some(report => report.id === id))) popupRef.current?.remove();
     setGeo('alert-pins', activeLayers.alert_pins ? alertPinsRef.current : []);
   }, [mapReady, data.alert_pins, activeLayers.alert_pins, alertPinIds, setGeo]);
 

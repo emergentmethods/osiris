@@ -1,5 +1,7 @@
 export type AskNewsErrorCode = 'missing-key' | 'auth' | 'forbidden' | 'quota' | 'rate' | 'timeout' | 'cancelled' | 'unavailable' | 'bad-input' | 'invalid-response' | 'too-large';
 export type AskNewsStatus = 'ok' | 'off' | 'loading' | 'stale' | AskNewsErrorCode;
+export interface AskNewsPlace { name: string; label: string; precision: 'mentioned-place' }
+export interface AskNewsEntity { title: string; qid: string; relevance: number }
 export interface AskNewsArticle {
   id: string;
   title: string;
@@ -9,8 +11,9 @@ export interface AskNewsArticle {
   key_points: string[];
   link: string;
   via: 'AskNews';
-  place: null;
-  coords: null;
+  place: AskNewsPlace | null;
+  coords: [number, number] | null;
+  wikidata_entities?: Record<string, AskNewsEntity[]>;
 }
 export const ASKNEWS_STATUS: Record<AskNewsStatus, string> = {
   ok: 'AskNews reporting is up to date.', off: 'AskNews is off.', loading: 'Loading AskNews reporting…',

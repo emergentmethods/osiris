@@ -20,6 +20,7 @@ it('uses the installed SDK for two private pages and projects safe newest-first 
   expect(items.map(a => a.title)).toEqual(['New report', 'Old report']);
   expect(calls.map(c => c.url.searchParams.get('offset'))).toEqual(['0', '100']);
   for (const { url, init } of calls) {
+    expect(url.origin).toBe('https://api.asknews.app');
     expect(url.pathname).toBe('/v1/news/search');
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ n_articles: '100', time_filter: 'pub_date', page_rank: '200000', return_geo: 'true', podcasts: 'include', return_type: 'dicts' });
     expect(Number(url.searchParams.get('start_timestamp'))).toBeGreaterThan(Date.now() / 1000 - 1805);
@@ -62,4 +63,56 @@ it('rejects oversized and malformed replies without returning upstream content',
   const source = askNewsFor(new Headers({ 'X-AskNews-Key': 'reader-key' }));
   await expect(source.latest()).rejects.toMatchObject({ code: 'too-large' });
   await expect(source.latest()).rejects.toMatchObject({ code: 'invalid-response' });
+});
+
+it('preserves deterministic mentioned places and only fixture-supported Wikidata identities through raw JSON', async () => {
+  vi.stubEnv('ASKNEWS_FEED_SIZE', '1');
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ as_dicts: [{
+    title: 'Placed reporting', article_url: 'https://publisher.test/places',
+    geo_coordinates: { Zurich: { latitude: 47.37, longitude: 8.54 }, Berlin: { latitude: 52.52, longitude: 13.405 }, Bad: { latitude: 91, longitude: 0 } },
+    wikidata_entities: { companies: [{ title: 'Example, Inc.', qid: 'Q123', relevance: 0.95, description: 'Do not retain', source_mention: 'Example' }],
+      people: [], topics: [{ title: 'Wrong shape', id: 'Q456' }, { title: 'Invalid id', qid: 'not-a-qid', relevance: 1 }] },
+  }, { title: 'QID alone', article_url: 'https://publisher.test/qid', wikidata_entities: { topics: [{ title: 'Example topic', qid: 'Q789', relevance: 0.75 }] } }] })));
+  const items = JSON.parse(JSON.stringify(await askNewsFor(new Headers({ 'X-AskNews-Key': 'reader-key' })).latest()));
+  expect(items[0]).toMatchObject({ place: { name: 'Berlin', label: 'Berlin', precision: 'mentioned-place' }, coords: [52.52, 13.405],
+    wikidata_entities: { companies: [{ title: 'Example, Inc.', qid: 'Q123', relevance: 0.95 }] } });
+  expect(items[0].wikidata_entities.topics).toBeUndefined();
+  expect(JSON.stringify(items)).not.toContain('Do not retain');
+  expect(items[1]).toMatchObject({ place: null, coords: null });
+});
+
+it('searches nearby through the real SDK using meters and configurable fake upstream without feed overrides', async () => {
+  vi.stubEnv('ASKNEWS_API_KEY', 'operator-key');
+  vi.stubEnv('ASKNEWS_API_BASE_URL', 'http://127.0.0.1:45678');
+  vi.stubEnv('ASKNEWS_FEED_SIZE', '200'); vi.stubEnv('ASKNEWS_FEED_WINDOW_SECONDS', '1');
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ as_dicts: [] }));
+  vi.stubGlobal('fetch', fetcher);
+  await askNewsFor(new Headers()).near(35.68, 139.69);
+  const url = new URL(String(fetcher.mock.calls[0][0]));
+  expect(url.origin).toBe('http://127.0.0.1:45678');
+  expect(Object.fromEntries(url.searchParams)).toMatchObject({ geo_lat: '35.68', geo_lon: '139.69', geo_radius: '50000', hours_back: '24', n_articles: '10', time_filter: 'pub_date', return_geo: 'true', return_type: 'dicts' });
+  expect(url.searchParams.has('start_timestamp')).toBe(false);
+  expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer operator-key');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await expect(askNewsFor(new Headers()).near(NaN, 0)).rejects.toMatchObject({ code: 'bad-input' });
+  await expect(askNewsFor(new Headers()).near(0, 181)).rejects.toMatchObject({ code: 'bad-input' });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it.each([null, {}, { geo_coordinates: { Berlin: { latitude: '52.52', longitude: 13.4 } } }, { geo_coordinates: { Berlin: { latitude: Infinity, longitude: 13.4 } } }])('does not fabricate a pin from absent or invalid coordinates (%j)', async value => {
+  vi.stubEnv('ASKNEWS_FEED_SIZE', '1');
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ as_dicts: [{ title: 'No position', article_url: 'https://publisher.test/no-place', ...value }] })));
+  expect((await askNewsFor(new Headers({ 'X-AskNews-Key': 'reader-key' })).latest())[0]).toMatchObject({ place: null, coords: null });
+});
+
+it('cancels the nearby SDK request without a retry or leaked upstream exception', async () => {
+  const controller = new AbortController();
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('reader-key cancelled upstream')));
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  const pending = askNewsFor(new Headers({ 'X-AskNews-Key': 'reader-key' })).near(10, 20, controller.signal);
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1)); controller.abort();
+  await expect(pending).rejects.toMatchObject({ code: 'cancelled', message: 'AskNews request cancelled.' });
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

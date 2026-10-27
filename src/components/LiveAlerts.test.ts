@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toWarning, urgency, expiryLabel, type WarningAlert } from './LiveAlerts';
+import { toNews, toWarning, urgency, expiryLabel, type WarningAlert } from './LiveAlerts';
 
 /* Shaped as /api/weather sends them — NOAA/NWS, GDACS and NASA EONET. */
 const nws = {
@@ -90,4 +90,11 @@ describe('urgency', () => {
     expect(urgency(quake(6.1))).toBeGreaterThan(urgency(quake(4.9)));
     expect(urgency(report({ alertKind: 'rocket' }))).toBeGreaterThan(urgency(report({})));
   });
+});
+
+it('accepts AskNews mentioned places after a JSON round trip without inventing precision', () => {
+  const article = JSON.parse(JSON.stringify({ id: 'asknews:a', title: 'A report', source_name: 'Publisher', via: 'AskNews',
+    published: '2026-10-27T10:00:00.000Z', link: 'https://publisher.test/a', key_points: ['A point'],
+    place: { name: 'Berlin', label: 'Berlin', precision: 'mentioned-place' }, coords: [52.52, 13.405] }));
+  expect(toNews(article)).toMatchObject({ place: { name: 'Berlin', label: 'Berlin', precision: 'mentioned-place' }, coords: [52.52, 13.405], via: 'AskNews' });
 });
