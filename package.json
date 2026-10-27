@@ -14,6 +14,7 @@
     "test:live": "RUN_LIVE_TESTS=1 vitest run"
   },
   "dependencies": {
+    "@emergentmethods/asknews-typescript-sdk": "0.4.23",
     "@google/generative-ai": "^0.24.1",
     "@vercel/analytics": "^2.0.1",
     "framer-motion": "^12.38.0",

@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { askNewsFor, AskNewsError, operatorConfigured } from '@/lib/asknews';
+import { mergeNews } from '@/lib/asknews/domain';
 import crypto from 'crypto';
 import { cachedSource } from '@/lib/sourceCache';
 import { fingerprint, htmlToText, parseChannelPage, splitHeadline, type TelegramPost } from '@/lib/telegram';
@@ -454,7 +456,7 @@ async function buildFeed(): Promise<FeedPayload> {
   }
 }
 
-export async function GET() {
+async function publicFeed() {
   try {
     const fresh = feed && Date.now() - feed.at < FEED_TTL_MS;
     if (!fresh) {
@@ -472,4 +474,19 @@ export async function GET() {
     if (feed) return NextResponse.json(feed.body, { headers: { 'Cache-Control': 'public, s-maxage=30' } });
     return NextResponse.json({ news: [], error: 'Failed to fetch intel' }, { status: 500 });
   }
+}
+
+export async function GET(req?: Request) {
+  const params = req ? new URL(req.url).searchParams : null;
+  const headers = { 'Cache-Control': 'private, no-store' };
+  if (params?.get('probe') === 'asknews') return NextResponse.json({ configured: operatorConfigured() }, { headers });
+  if (params?.get('asknews') !== '1') return publicFeed();
+  const reporting = askNewsFor(req!.headers).latest(req!.signal).then(
+    articles => ({ articles, status: 'ok' }),
+    error => ({ articles: [], status: error instanceof AskNewsError ? error.code : 'unavailable' }),
+  );
+  const [response, result] = await Promise.all([publicFeed(), reporting]);
+  const body = await response.json();
+  const news = mergeNews(body.news ?? [], result.articles);
+  return NextResponse.json({ ...body, news, total: news.length, asknews: { status: result.status, count: result.articles.length } }, { headers });
 }
