@@ -27,7 +27,7 @@ export function disabled(): boolean {
 }
 
 export function json(data: unknown, status = 200, headers: Record<string, string> = {}) {
-  return NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
+  return NextResponse.json(data, { status, headers: { 'Cache-Control': 'private, no-store', ...headers } });
 }
 
 export function fail(status: number, error: string, extra: Record<string, unknown> = {}) {
