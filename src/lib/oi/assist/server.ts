@@ -10,6 +10,7 @@
  */
 import { canSeeImages, createChat, providerInfo, ProviderError, type ChatFn, type ChatRequest } from '../providers';
 import type { Credentials } from '../service';
+import type { AskNewsOperations } from '../../asknews/mcp-domain';
 import { parseStep, sanitizeContext, sanitizeMessages, systemPrompt, userPrompt, type AssistMessage, type Step } from './protocol';
 
 export type Stepped =
@@ -38,7 +39,7 @@ async function framesFor(last: AssistMessage): Promise<{ images: NonNullable<Cha
   };
 }
 
-export async function assistStep(body: Record<string, unknown>, creds: Credentials, signal?: AbortSignal, chat?: ChatFn): Promise<Stepped> {
+export async function assistStep(body: Record<string, unknown>, creds: Credentials, signal?: AbortSignal, chat?: ChatFn, asknews?: AskNewsOperations): Promise<Stepped> {
   const messages = sanitizeMessages(body.messages);
   const last = messages[messages.length - 1];
   if (!last || last.role === 'assistant') return { ok: false, status: 400, error: 'Send the conversation, ending with your message or the results of the last actions.' };
@@ -50,15 +51,20 @@ export async function assistStep(body: Record<string, unknown>, creds: Credentia
   try {
     const call = chat ?? createChat(creds.provider, creds.key ?? '', model);
     const seen = canSeeImages(creds.provider, model) ? await framesFor(last) : { images: [], note: '' };
+    const tools = asknews ? await asknews.tools(signal).catch(() => []) : [];
+    const scrub = (value: string) => {
+      const safe = asknews?.scrub(value) ?? value;
+      return creds.key ? safe.replaceAll(creds.key, '[redacted]') : safe;
+    };
     const out = await call({
-      system: systemPrompt(), user: userPrompt(messages, context) + seen.note, json: true, maxTokens: 1400, temperature: 0.3, timeoutMs: 45_000, signal,
+      system: scrub(systemPrompt(tools)), user: scrub(userPrompt(messages, context) + seen.note), json: true, maxTokens: 1400, temperature: 0.3, timeoutMs: 45_000, signal,
       ...(seen.images.length ? { images: seen.images } : {}),
     });
-    return { ok: true, step: parseStep(out.text), usage: { input: out.input, output: out.output } };
+    return { ok: true, step: parseStep(scrub(out.text)), usage: { input: out.input, output: out.output } };
   } catch (err) {
     if (err instanceof ProviderError) {
       const status = err.code === 'auth' ? 401 : err.code === 'quota' ? 402 : err.code === 'rate' ? 429 : err.code === 'model' || err.code === 'bad_request' ? 400 : 502;
-      return { ok: false, status, error: err.message };
+      return { ok: false, status, error: asknews?.scrub(err.message) ?? err.message };
     }
     if (signal?.aborted) return { ok: false, status: 499, error: 'Cancelled.' };
     return { ok: false, status: 500, error: 'OI could not answer just then.' };
