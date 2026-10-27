@@ -13,10 +13,12 @@ it('composes request-private MCP operations with reader precedence and operator 
   }));
   const reader = askNewsFor(new Headers({ 'X-AskNews-Key': 'reader-fixture-key' }));
   await expect(reader.tools()).resolves.toEqual([]);
+  expect(keys.length).toBeGreaterThan(0);
   expect(keys.every(key => key === 'reader-fixture-key')).toBe(true);
   expect(reader.scrub('reader-fixture-key')).toBe('[redacted]');
   keys.length = 0;
   await expect(askNewsFor(new Headers()).tools()).resolves.toEqual([]);
+  expect(keys.length).toBeGreaterThan(0);
   expect(keys.every(key => key === 'operator-fixture-key')).toBe(true);
   await expect(askNewsFor(new Headers({ 'X-AskNews-Key': '' })).tools()).rejects.toMatchObject({ code: 'auth' });
 });

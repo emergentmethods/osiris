@@ -1,4 +1,3 @@
-import { askNewsOperationsFor } from '@/lib/asknews/operations';
 import { assistStep } from '@/lib/oi/assist/server';
 import { credentials, disabled, json, limited, readBody } from '@/lib/oi/service';
 
@@ -26,7 +25,7 @@ export async function POST(req: Request) {
   const creds = credentials(req, body);
   if ('error' in creds) return privateJson({ error: creds.error }, 400);
 
-  const out = await assistStep(body, creds, req.signal, undefined, askNewsOperationsFor(req.headers));
+  const out = await assistStep(body, creds, req.signal);
   if (!out.ok) return privateJson({ error: out.error }, out.status);
   return privateJson({ step: { say: out.step.say, actions: out.step.calls, done: out.step.done }, usage: out.usage });
 }

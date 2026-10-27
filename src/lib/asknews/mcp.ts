@@ -1,16 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { AskNewsError } from './index';
-import { safeNewsUrl, type AskNewsErrorCode } from './domain';
+import { AskNewsError, classifyAskNewsStatus } from './domain';
+import { projectArticle } from './project';
 import { validAskNewsCall, type AskNewsCall, type AskNewsOperations, type AskNewsOutput, type AskNewsTool } from './mcp-domain';
 
 const object = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
-const codes: Record<number, AskNewsErrorCode> = { 400: 'bad-input', 401: 'auth', 402: 'quota', 403: 'forbidden', 429: 'rate' };
 
 export function mcpOperations(key: string, options: { url?: string } = {}): AskNewsOperations {
   const scrub = (text: string) => key ? text.replaceAll(key, '[redacted]').replaceAll(JSON.stringify(key).slice(1, -1), '[redacted]') : text;
   const text = (v: unknown, max: number) => typeof v === 'string' ? scrub(v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
-  const urlOf = (v: unknown) => typeof v === 'string' && (!key || !v.includes(key)) ? safeNewsUrl(v) : null;
   async function operation<T>(duration: number, caller: AbortSignal | undefined, run: (client: Client, signal: AbortSignal) => Promise<T>): Promise<T> {
     if (!key) throw new AskNewsError('missing-key');
     if (!/^[\x21-\x7e]{8,400}$/.test(key)) throw new AskNewsError('auth');
@@ -28,7 +26,7 @@ export function mcpOperations(key: string, options: { url?: string } = {}): AskN
         const response = await fetch(url, { ...init, cache: 'no-store', redirect: 'error', signal: AbortSignal.any([signal, ...(init?.signal ? [init.signal] : [])]) });
         if (!response.ok) {
           await response.body?.cancel();
-          failure = new AskNewsError(codes[response.status] ?? 'unavailable'); throw failure;
+          failure = new AskNewsError(classifyAskNewsStatus(response.status)); throw failure;
         }
         if (!response.body) return response;
         const reader = response.body.getReader();
@@ -98,24 +96,8 @@ export function mcpOperations(key: string, options: { url?: string } = {}): AskN
       const data = object(value);
       const rows = Array.isArray(value) ? value : data && (Array.isArray(data.as_dicts) ? data.as_dicts : Array.isArray(data.sources) ? data.sources : Array.isArray(data.articles) ? data.articles : null);
       if (rows) for (const item of rows.slice(0, 25)) {
-        const row = object(item); if (!row) continue;
-        const link = urlOf(row.article_url ?? row.url ?? row.link);
-        const title = text(row.eng_title ?? row.title, 520);
-        if (!title || !link) continue;
-        const source = text(row.source_name ?? row.source ?? new URL(link).hostname, 200);
-        const date = row.pub_date ?? row.publication_date ?? row.published;
-        const published = typeof date === 'string' && Number.isFinite(Date.parse(date)) ? new Date(date).toISOString() : '';
-        const points = Array.isArray(row.key_points) ? row.key_points : [row.summary];
-        let place: AskNewsOutput['articles'][number]['place'] = null;
-        let coords: [number, number] | null = null;
-        const geo = object(row.geo_coordinates);
-        if (geo) for (const name of Object.keys(geo).sort()) {
-          const p = object(geo[name]);
-          if (p && typeof p.latitude === 'number' && typeof p.longitude === 'number' && Number.isFinite(p.latitude) && Number.isFinite(p.longitude) && Math.abs(p.latitude) <= 90 && Math.abs(p.longitude) <= 180 && text(name, 200)) {
-            place = { name: text(name, 200), precision: 'mentioned-place' }; coords = [p.latitude, p.longitude]; break;
-          }
-        }
-        if (output.articles.length < 25 && !output.articles.some(a => a.link === link)) output.articles.push({ id: `asknews:${link}`, title, link, source, source_name: source, published, key_points: points.slice(0, 5).map(p => text(p, 520)).filter(Boolean), via: 'AskNews', place, coords });
+        const article = projectArticle(item, key);
+        if (article && output.articles.length < 25 && !output.articles.some(a => a.link === article.link)) output.articles.push(article);
       }
       if (data && typeof data.overview === 'string') output.notes.push({ kind: 'synthesis', title: 'AskNews DeepNews synthesis', text: text(data.overview, 4000) });
       else if (!rows) {

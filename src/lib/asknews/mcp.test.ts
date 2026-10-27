@@ -236,3 +236,9 @@ it('carries Forecast request credentials into real MCP HTTP and returns paraphra
     expect(prompts.filter(p => p.includes('Plan the research'))).toHaveLength(1);
   } finally { vi.unstubAllEnvs(); }
 });
+
+it('uses the same named-place projection as REST', async () => {
+  result = { structuredContent: { articles: [{ title: 'Located report', url: 'https://publisher.test/place', geo_coordinates: { Berlin: { latitude: 52.52, longitude: 13.405 } } }] }, content: [] };
+  const out = await mcpOperations(key, { url }).call({ tool: tool.name, args: {} });
+  expect(out.articles[0].place).toEqual({ name: 'Berlin', label: 'Berlin', precision: 'mentioned-place' });
+});

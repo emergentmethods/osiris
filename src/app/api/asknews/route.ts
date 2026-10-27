@@ -1,5 +1,4 @@
-import { askNewsOperationsFor } from '@/lib/asknews/operations';
-import { AskNewsError } from '@/lib/asknews';
+import { askNewsFor, AskNewsError } from '@/lib/asknews';
 import { disabled, limited, readBody } from '@/lib/oi/service';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +18,7 @@ export async function POST(req: Request) {
   const body = await readBody(req, 4608);
   if (!body || typeof body.tool !== 'string' || !body.args || typeof body.args !== 'object' || Array.isArray(body.args)) return json({ error: 'Invalid AskNews request.', code: 'bad-input' }, 400);
   try {
-    const output = await askNewsOperationsFor(req.headers).call({ tool: body.tool, args: body.args as Record<string, unknown> }, req.signal);
+    const output = await askNewsFor(req.headers).call({ tool: body.tool, args: body.args as Record<string, unknown> }, req.signal);
     return json(output);
   } catch (error) {
     const code = error instanceof AskNewsError ? error.code : 'unavailable';

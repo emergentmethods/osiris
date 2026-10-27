@@ -48,3 +48,11 @@ export function mergeNews<T extends { link?: string; published?: string; via?: s
   }
   return items.sort((a, b) => (Date.parse(b.published ?? '') || 0) - (Date.parse(a.published ?? '') || 0));
 }
+
+export class AskNewsError extends Error {
+  constructor(readonly code: AskNewsErrorCode) { super(ASKNEWS_STATUS[code]); }
+}
+export function classifyAskNewsStatus(status: number): AskNewsErrorCode {
+  const codes: Record<number, AskNewsErrorCode> = { 400: 'bad-input', 401: 'auth', 402: 'quota', 403: 'forbidden', 429: 'rate' };
+  return codes[status] ?? 'unavailable';
+}

@@ -3,10 +3,7 @@ import type { AskNewsArticle } from './domain';
 export interface AskNewsTool { name: string; description: string; inputSchema: Record<string, unknown> }
 export interface AskNewsCall { tool: string; args: Record<string, unknown> }
 export interface AskNewsOutput {
-  articles: (Omit<AskNewsArticle, 'place' | 'coords'> & {
-    place: { name: string; precision: 'mentioned-place' } | null;
-    coords: [number, number] | null;
-  })[];
+  articles: AskNewsArticle[];
   notes: { kind: 'synthesis' | 'reference'; title: string; text: string }[];
 }
 export interface AskNewsOperations {

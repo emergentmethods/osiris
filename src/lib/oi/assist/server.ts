@@ -10,7 +10,6 @@
  */
 import { canSeeImages, createChat, providerInfo, ProviderError, type ChatFn, type ChatRequest } from '../providers';
 import type { Credentials } from '../service';
-import type { AskNewsOperations } from '../../asknews/mcp-domain';
 import { parseStep, sanitizeContext, sanitizeMessages, systemPrompt, userPrompt, type AssistMessage, type Step } from './protocol';
 
 export type Stepped =
@@ -39,7 +38,8 @@ async function framesFor(last: AssistMessage): Promise<{ images: NonNullable<Cha
   };
 }
 
-export async function assistStep(body: Record<string, unknown>, creds: Credentials, signal?: AbortSignal, chat?: ChatFn, asknews?: AskNewsOperations): Promise<Stepped> {
+export async function assistStep(body: Record<string, unknown>, creds: Credentials, signal?: AbortSignal, chat?: ChatFn): Promise<Stepped> {
+  const asknews = creds.asknews;
   const messages = sanitizeMessages(body.messages);
   const last = messages[messages.length - 1];
   if (!last || last.role === 'assistant') return { ok: false, status: 400, error: 'Send the conversation, ending with your message or the results of the last actions.' };

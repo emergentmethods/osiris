@@ -1,11 +1,10 @@
 import { Configuration, NewsApi, type SearchNewsRequest } from '@emergentmethods/asknews-typescript-sdk';
+import { projectArticle } from './project';
 import { mcpOperations } from './mcp';
 import type { AskNewsOperations } from './mcp-domain';
-import { ASKNEWS_STATUS, mergeNews, safeNewsUrl, type AskNewsArticle, type AskNewsEntity, type AskNewsErrorCode } from './domain';
+import { AskNewsError, classifyAskNewsStatus, mergeNews, type AskNewsArticle } from './domain';
 
-export class AskNewsError extends Error {
-  constructor(readonly code: AskNewsErrorCode) { super(ASKNEWS_STATUS[code]); }
-}
+export { AskNewsError } from './domain';
 export function operatorConfigured(): boolean { return !!process.env.ASKNEWS_API_KEY?.trim(); }
 export interface AskNews extends AskNewsOperations {
   latest(signal?: AbortSignal): Promise<AskNewsArticle[]>;
@@ -23,14 +22,11 @@ export function askNewsFor(headers: Headers): AskNews {
     if (!key) throw new AskNewsError(headers.has('X-AskNews-Key') ? 'auth' : 'missing-key');
     if (!/^[\x21-\x7e]{8,400}$/.test(key)) throw new AskNewsError('auth');
     const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(callerSignal ? [callerSignal] : [])]);
-    const scrub = (value: unknown, max: number) => typeof value === 'string'
-      ? value.replaceAll(key, '[redacted]').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max).trim() : '';
     const client = new NewsApi(new Configuration({ apiKey: key, basePath: process.env.ASKNEWS_API_BASE_URL?.replace(/\/$/, '') || undefined, fetchApi: async (url, init) => {
       const response = await fetch(url, { ...init, signal, cache: 'no-store' });
       if (!response.ok) {
         await response.body?.cancel();
-        const codes: Record<number, AskNewsErrorCode> = { 400: 'bad-input', 401: 'auth', 402: 'quota', 403: 'forbidden', 429: 'rate' };
-        throw new AskNewsError(codes[response.status] ?? 'unavailable');
+        throw new AskNewsError(classifyAskNewsStatus(response.status));
       }
       const reader = response.body?.getReader();
       if (!reader) throw new AskNewsError('invalid-response');
@@ -54,41 +50,8 @@ export function askNewsFor(headers: Headers): AskNews {
         const body = await result.raw.json();
         if (!Array.isArray(body.as_dicts)) throw new AskNewsError('invalid-response');
         for (const raw of body.as_dicts) {
-          if (!raw || typeof raw !== 'object') continue;
-          const link = safeNewsUrl(raw.article_url);
-          const title = scrub(raw.eng_title || raw.title, 520);
-          if (!link || link.includes(key) || !title) continue;
-          const publisher = scrub(raw.source_name || raw.domain_url || new URL(link).hostname, 200);
-          const date = typeof raw.pub_date === 'string' && Number.isFinite(Date.parse(raw.pub_date)) ? new Date(raw.pub_date).toISOString() : '';
-          const places = raw.geo_coordinates && typeof raw.geo_coordinates === 'object'
-            ? Object.entries(raw.geo_coordinates).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0) : [];
-          const located = places.find(([name, value]) => {
-            const point = value as { latitude?: unknown; longitude?: unknown } | null;
-            return scrub(name, 200) && point && typeof point.latitude === 'number' && typeof point.longitude === 'number'
-              && Number.isFinite(point.latitude) && Math.abs(point.latitude) <= 90
-              && Number.isFinite(point.longitude) && Math.abs(point.longitude) <= 180;
-          });
-          const point = located?.[1] as { latitude: number; longitude: number } | undefined;
-          const name = located ? scrub(located[0], 200) : '';
-          const entities: Record<string, AskNewsEntity[]> = {};
-          if (raw.wikidata_entities && typeof raw.wikidata_entities === 'object' && !Array.isArray(raw.wikidata_entities)) {
-            for (const [group, values] of Object.entries(raw.wikidata_entities).slice(0, 20)) {
-              if (!Array.isArray(values)) continue;
-              const entries: AskNewsEntity[] = values.slice(0, 20).flatMap(value => {
-                if (!value || typeof value !== 'object' || typeof value.qid !== 'string' || !/^Q[1-9][0-9]*$/.test(value.qid)
-                  || typeof value.relevance !== 'number' || !Number.isFinite(value.relevance)) return [];
-                const title = scrub(value.title, 200);
-                return title ? [{ title, qid: value.qid, relevance: value.relevance }] : [];
-              });
-              const label = scrub(group, 100);
-              if (label && entries.length) Object.defineProperty(entities, label, { value: entries, enumerable: true });
-            }
-          }
-          items.push({ id: `asknews:${link}`, title, link, source: publisher, source_name: publisher, published: date,
-            key_points: Array.isArray(raw.key_points) ? raw.key_points.slice(0, 5).map((p: unknown) => scrub(p, 520)).filter(Boolean) : [],
-            via: 'AskNews', place: point ? { name, label: name, precision: 'mentioned-place' } : null,
-            coords: point ? [point.latitude, point.longitude] : null,
-            ...(Object.keys(entities).length ? { wikidata_entities: entities } : {}) });
+          const article = projectArticle(raw, key);
+          if (article) items.push(article);
         }
       }
       return mergeNews([], items);
