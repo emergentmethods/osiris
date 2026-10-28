@@ -58,6 +58,8 @@ interface OsirisMapProps {
   onEntityClick?: (entity: any) => void;
   onMouseCoords?: (coords: { lat: number; lng: number }) => void;
   onRightClick?: (coords: { lat: number; lng: number }) => void;
+  /** Reporting near the open dossier's spot, pinned while the dossier is open. */
+  nearbyReports?: PinnedReport[];
   onViewStateChange?: (vs: { zoom: number; latitude: number }) => void;
   /** `alertId` also opens that Live Alert's pin once the camera arrives.
    *  `duration` overrides the default 2 s flight. */
@@ -168,6 +170,8 @@ interface PinnedReport {
   media?: { kind?: string; video?: string | null; thumb?: string | null; duration?: string | null } | null;
 }
 
+const NO_REPORTS: PinnedReport[] = [];
+
 /** A report posted this recently gets the pulsing ring. */
 const ALERT_FRESH_MS = 15 * 60_000;
 
@@ -206,7 +210,7 @@ interface AlertPinFeature {
   properties: AlertPinProps;
 }
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, onReady, flyToLocation, alertPinIds = null, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, onLayerOff, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, onTransitStatus, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {}, onOiGlobe, onOiSelect, onOiHover, onOiFollow, oiHighlight = null }: OsirisMapProps) {
+function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, onReady, flyToLocation, alertPinIds = null, nearbyReports = NO_REPORTS, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, onLayerOff, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, onTransitStatus, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {}, onOiGlobe, onOiSelect, onOiHover, onOiFollow, oiHighlight = null }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -2305,7 +2309,12 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   // feed's locate button can still open a report's pin.
   useEffect(() => {
     if (!mapReady) return;
-    const reports: PinnedReport[] = Array.isArray(data.alert_pins) ? data.alert_pins : [];
+    const feed: PinnedReport[] = Array.isArray(data.alert_pins) ? data.alert_pins : [];
+    /* The dossier's nearby reporting joins the feed's pins while it is open;
+       a report already in the feed is pinned once. */
+    const inFeed = new Set(feed.map(r => r.id));
+    const nearby = new Set(nearbyReports.filter(r => !inFeed.has(r.id)).map(r => r.id));
+    const reports = [...feed, ...nearbyReports.filter(r => nearby.has(r.id))];
     /* The feed hides what its filters exclude; the map follows it, so a search
        or a theatre filter narrows the pins to the reports being read. */
     const shown = alertPinIds ? new Set(alertPinIds) : null;
@@ -2315,7 +2324,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       if (!n?.place || !Array.isArray(n.coords)) return [];
       const [lat, lng] = n.coords;
       if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180) return [];
-      if (shown && !shown.has(n.id)) return [];
+      if (shown && !shown.has(n.id) && !nearby.has(n.id)) return [];
       return [{ n, lat, lng }];
     });
 
@@ -2351,8 +2360,11 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       },
     }));
     if (alertPopupIds.current.some(id => !reports.some(report => report.id === id))) popupRef.current?.remove();
-    setGeo('alert-pins', activeLayers.alert_pins ? alertPinsRef.current : []);
-  }, [mapReady, data.alert_pins, activeLayers.alert_pins, alertPinIds, setGeo]);
+    /* AskNews pins belong to the AskNews layer: turning that source on
+       shows its mentioned places even with Live Alert Pins off. */
+    setGeo('alert-pins', activeLayers.alert_pins ? alertPinsRef.current
+      : activeLayers.asknews ? alertPinsRef.current.filter(f => f.properties.via === 'AskNews') : []);
+  }, [mapReady, data.alert_pins, nearbyReports, activeLayers.alert_pins, activeLayers.asknews, alertPinIds, setGeo]);
 
   /* The newest reports pulse, so something that just landed catches the eye
      without the other pins moving. Same 200ms tick the malware ring uses. */
@@ -2455,7 +2467,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['choke-glow','choke-dots','choke-label'], activeLayers.maritime);
     setVis(['ship-dots','ship-label'], activeLayers.maritime);
     setVis(['news-glow','news-dots','news-label'], activeLayers.live_news);
-    setVis(['alert-pin-glow','alert-pin-dots','alert-pin-label','alert-pin-pulse','alert-pin-selected'], activeLayers.alert_pins);
+    setVis(['alert-pin-glow','alert-pin-dots','alert-pin-label','alert-pin-pulse','alert-pin-selected'], activeLayers.alert_pins || activeLayers.asknews);
     setVis(['conflict-icons'], activeLayers.conflict_zones !== false);
 
     setVis(['balloon-dots','balloon-label'], activeLayers.balloons);

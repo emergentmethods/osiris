@@ -9,7 +9,9 @@ import { loadCameraCatalog, mergeCameraCatalog } from '@/lib/camera-catalog';
 import IntelFeed from '@/components/IntelFeed';
 import AskNewsKeySheet from '@/components/AskNewsKeySheet';
 import { createDossierLoader, type RegionDossier } from '@/lib/region-dossier-client';
-import { askNewsHeaders, createNewsLoader, loadAskNewsKey, subscribeAskNewsKey } from '@/lib/asknews-client';
+import type { AskNewsArticle } from '@/lib/asknews/domain';
+import { askNewsHeaders, createNewsLoader, createStoriesLoader, loadAskNewsKey, subscribeAskNewsKey } from '@/lib/asknews-client';
+import type { AskNewsStory } from '@/lib/asknews/stories';
 import { ASKNEWS_STATUS } from '@/lib/asknews/domain';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -884,15 +886,58 @@ export default function Dashboard() {
     }, 3000); // 3s debounce (was 1.5s)
   }, []);
 
+  /* Reporting found by dossier lookups stays pinned after the dossier closes
+     and builds up across lookups, so a tour of several places leaves its
+     reporting on the map. */
+  const [nearbyReports, setNearbyReports] = useState<AskNewsArticle[]>([]);
+  /* Story pins: each story at its place, plus any of its articles that carry
+     their own coordinates. They join the dossier's nearby reporting on the
+     map, outside the feed's filters, and go when the AskNews layer does. */
+  const [stories, setStories] = useState<AskNewsStory[] | undefined>(undefined);
+  const storyPins = useMemo(() => (stories ?? []).flatMap(story => [
+    ...(story.coords && story.place ? [{
+      id: `story:${story.id}`, title: story.headline, source_name: `AskNews story · ${story.n_articles} articles`, published: story.updated,
+      key_points: story.key_takeaways, via: 'AskNews' as const, link: story.articles[0]?.link ?? null, place: story.place, coords: story.coords,
+    }] : []),
+    ...story.articles.filter(a => a.coords && a.place),
+  ]), [stories]);
+  const mapReports = useMemo(() => [...nearbyReports, ...storyPins], [nearbyReports, storyPins]);
   useLayoutEffect(() => {
     dossierLoader.current = createDossierLoader(state => {
       setRegionDossier(state.body); setDossierLoading(state.loading); setDossierError(state.error);
+      const found = state.body?.asknews?.articles;
+      if (found?.length) setNearbyReports(prev => {
+        const seen = new Set(prev.map(r => r.id));
+        const added = found.filter(r => !seen.has(r.id));
+        return added.length ? [...prev, ...added] : prev;
+      });
     });
     return () => dossierLoader.current?.dispose();
   }, []);
+  /* A lookup asked for before the AskNews layer was on waits for the loader
+     to be configured with it, so the request carries the key. */
+  const pendingNearby = useRef<{ lat: number; lng: number } | null>(null);
   useLayoutEffect(() => {
     dossierLoader.current?.configure(activeLayers.asknews && askNewsReady, askNewsHeaders());
+    const pending = pendingNearby.current;
+    if (pending && activeLayers.asknews && askNewsReady) { pendingNearby.current = null; void dossierLoader.current?.open(pending); }
   }, [activeLayers.asknews, askNewsReady, askNewsKey]);
+  /* The toolbar's "reporting here" button: AskNews within 50 km of the view
+     centre over the past 24 hours, the same lookup a double right-click makes. */
+  const searchReportingHere = useCallback(() => {
+    if (!mapCenter) return;
+    const at = { lat: mapCenter.lat, lng: mapCenter.lng };
+    if (!askNewsReady) { setAskNewsSheet(true); return; }
+    if (!activeLayers.asknews) { pendingNearby.current = at; setActiveLayers(prev => ({ ...prev, asknews: true })); return; }
+    void dossierLoader.current?.open(at);
+  }, [mapCenter, askNewsReady, activeLayers.asknews]);
+  /* Turning the AskNews layer off clears the pins its lookups left. Adjusted
+     during render, as React asks for state that follows a prop. */
+  const [nearbyLayerOn, setNearbyLayerOn] = useState(!!activeLayers.asknews);
+  if (nearbyLayerOn !== !!activeLayers.asknews) {
+    setNearbyLayerOn(!!activeLayers.asknews);
+    if (!activeLayers.asknews) setNearbyReports([]);
+  }
   const handleRightClick = useCallback((coords: { lat: number; lng: number }) => {
     void dossierLoader.current?.open(coords);
   }, []);
@@ -1015,9 +1060,23 @@ export default function Dashboard() {
     });
     return () => newsLoader.current?.dispose();
   }, []);
+  /* The stories AskNews updated in the last day: the AskNews layer's top-level
+     view, read on its own schedule since it is up to ten calls a pull. Off,
+     `stories` is absent and the alerts panel shows no Stories tab. */
+  const storiesLoader = useRef<ReturnType<typeof createStoriesLoader> | null>(null);
+  useLayoutEffect(() => {
+    storiesLoader.current = createStoriesLoader(body => {
+      const next = body.asknews?.status === 'off' ? undefined : body.stories;
+      dataRef.current = { ...dataRef.current, stories: next, stories_meta: { fetchedAt: body.timestamp ?? null, asknews: body.asknews } };
+      setStories(next);
+      setDataVersion(v => v + 1);
+    });
+    return () => storiesLoader.current?.dispose();
+  }, []);
   useEffect(() => {
     const changed = () => {
       newsLoader.current?.configure(false, {});
+      storiesLoader.current?.configure(false, {});
       dossierLoader.current?.configure(false, {});
       setAskNewsKey(loadAskNewsKey());
       setActiveLayers(prev => ({ ...prev, asknews: false }));
@@ -1031,7 +1090,10 @@ export default function Dashboard() {
     newsLoader.current?.configure(enabled, askNewsHeaders());
     void newsLoader.current?.load();
     const poll = setInterval(() => void newsLoader.current?.load(true), 300000);
-    return () => { clearInterval(poll); newsLoader.current?.dispose(); };
+    storiesLoader.current?.configure(enabled, askNewsHeaders());
+    void storiesLoader.current?.load();
+    const storiesPoll = setInterval(() => void storiesLoader.current?.load(true), 600000);
+    return () => { clearInterval(poll); clearInterval(storiesPoll); newsLoader.current?.dispose(); storiesLoader.current?.dispose(); };
   }, [activeLayers.asknews, askNewsReady, askNewsKey, newsLoader]);
   const askNewsPanelProps = {
     onAskNewsKey: () => setAskNewsSheet(true), asknewsReady: askNewsReady,
@@ -1623,6 +1685,7 @@ export default function Dashboard() {
           onReady={() => setMapReady(true)}
           flyToLocation={flyToLocation}
           alertPinIds={pinnedAlertIds}
+          nearbyReports={mapReports}
           sweepData={sweepData}
           scanTargets={scanTargets}
           demoMode={demoMode}
@@ -2082,7 +2145,12 @@ export default function Dashboard() {
           </AnimatePresence>
         </div>
 
-
+        <div className="relative group">
+          <button onClick={searchReportingHere} disabled={!mapCenter} className="relative w-8 h-8 rounded-full flex items-center justify-center transition-all focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50 border duration-200 bg-[var(--gold-primary)]/[0.07] border-[var(--gold-primary)]/35 hover:bg-[var(--gold-primary)]/15 hover:border-[var(--gold-primary)]/60 hover:shadow-[0_0_14px_rgba(var(--gold-rgb),0.25)] disabled:opacity-40" title={askNewsReady ? 'Reporting here — AskNews within 50 km of the view centre, past 24 hours' : 'Reporting here — needs an AskNews key'} aria-label="Reporting here">
+            <Newspaper className="w-4 h-4 text-[var(--gold-primary)]" />
+          </button>
+          <span className="absolute right-11 top-1/2 -translate-y-1/2 px-2 py-1 text-[9px] font-mono tracking-wider text-white/80 bg-black/80 backdrop-blur-sm rounded whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none">REPORTING HERE</span>
+        </div>
       </motion.div>}
 
       {/* ── LIVE FEED VIEWER OVERLAY ── */}

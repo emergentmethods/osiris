@@ -2,11 +2,16 @@ import { safeNewsUrl, type AskNewsArticle, type AskNewsEntity } from './domain';
 
 const object = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
 
+/** A string from upstream, with the credential redacted and control characters removed. */
+export function cleanText(v: unknown, max: number, key: string): string {
+  return typeof v === 'string'
+    ? (key ? v.replaceAll(key, '[redacted]').replaceAll(JSON.stringify(key).slice(1, -1), '[redacted]') : v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
+}
+
 export function projectArticle(value: unknown, key: string): AskNewsArticle | null {
   const row = object(value);
   if (!row) return null;
-  const text = (v: unknown, max: number) => typeof v === 'string'
-    ? (key ? v.replaceAll(key, '[redacted]').replaceAll(JSON.stringify(key).slice(1, -1), '[redacted]') : v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
+  const text = (v: unknown, max: number) => cleanText(v, max, key);
   const link = safeNewsUrl(row.article_url ?? row.url ?? row.link);
   const title = text(row.eng_title || row.title, 520);
   if (!title || !link || key && link.includes(key)) return null;

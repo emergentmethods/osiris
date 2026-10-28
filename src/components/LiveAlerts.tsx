@@ -20,6 +20,9 @@ interface LiveAlertsData {
   earthquakes?: unknown[];
   weather_events?: unknown[];
   news_meta?: { sources?: SourceHealth[]; fetchedAt?: string | null };
+  /** AskNews stories, present only while that layer is on. */
+  stories?: unknown[];
+  stories_meta?: { fetchedAt?: string | null; asknews?: { status: string; count?: number } };
 }
 
 /** Where to fly: `alertId` also opens that report's pin on the map. */
@@ -77,7 +80,7 @@ const FEED_REGIONS: Record<string, string> = {
   americas: 'AMERICAS', europe: 'EUROPE', middleeast: 'MIDDLE EAST', asia: 'ASIA PACIFIC', africa: 'AFRICA',
 };
 
-type Tab = 'all' | 'news' | 'warnings' | 'quakes' | 'feeds';
+type Tab = 'all' | 'stories' | 'news' | 'warnings' | 'quakes' | 'feeds';
 
 /** The official warnings from /api/weather — NOAA/NWS, GDACS and NASA EONET. */
 export interface WarningAlert {
@@ -146,6 +149,22 @@ interface QuakeAlert {
 }
 
 type AlertItem = NewsAlert | QuakeAlert | WarningAlert;
+
+/** An AskNews story as the panel shows it: the latest update and its articles. */
+export interface StoryItem {
+  id: string;
+  ts: number;
+  headline: string;
+  summary: string;
+  takeaways: string[];
+  categories: string[];
+  locations: string[];
+  nArticles: number;
+  articles: { id: string; title: string; source: string; published: string; link: string | null; coords: [number, number] | null }[];
+  place: { name: string; label: string } | null;
+  coords: [number, number] | null;
+  haystack: string;
+}
 
 /** What the list renders: one alert, or a run of statements from one speaker. */
 type Unit =
@@ -296,6 +315,36 @@ export function toWarning(raw: unknown): WarningAlert | null {
 const SEVERITY_COLORS: Record<WarningAlert['severity'], string> = { high: '#FF3D3D', medium: '#FF9500', low: '#FFD700' };
 
 /** Which of two alerts posted in the same minute a reader needs first. */
+/** A story as /api/stories sends it; null when it lacks what a card needs. */
+export function toStory(raw: unknown): StoryItem | null {
+  const a = rec(raw);
+  const id = str(a.id);
+  const headline = str(a.headline);
+  const updated = str(a.updated);
+  const ts = updated ? Date.parse(updated) : NaN;
+  if (!id || !headline || !Number.isFinite(ts)) return null;
+  const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : []);
+  const coordsOf = (v: unknown): [number, number] | null =>
+    Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number' ? [v[0], v[1]] : null;
+  const articles = (Array.isArray(a.articles) ? a.articles : []).flatMap(item => {
+    const c = rec(item);
+    const title = str(c.title);
+    if (!title) return [];
+    return [{ id: str(c.id) ?? title, title, source: str(c.source_name) ?? str(c.source) ?? '', published: str(c.published) ?? '', link: webUrl(c.link), coords: coordsOf(c.coords) }];
+  });
+  const p = rec(a.place);
+  const placeName = str(p.name);
+  const place = placeName ? { name: placeName, label: str(p.label) ?? placeName } : null;
+  const takeaways = list(a.key_takeaways);
+  const locations = list(a.locations);
+  const summary = str(a.summary) ?? '';
+  return {
+    id, ts, headline, summary, takeaways, categories: list(a.categories), locations,
+    nArticles: numOrNull(a.n_articles) ?? articles.length, articles, place, coords: coordsOf(a.coords),
+    haystack: `${headline} ${takeaways.join(' ')} ${locations.join(' ')} ${articles.map(x => `${x.title} ${x.source}`).join(' ')}`.toLowerCase(),
+  };
+}
+
 export function urgency(item: AlertItem): number {
   if (item.kind === 'warning') return item.severity === 'high' ? 4 : item.severity === 'medium' ? 3 : 1;
   if (item.kind === 'quake') return item.magnitude >= 6 ? 4 : item.magnitude >= 5 ? 2 : 1;
@@ -328,6 +377,72 @@ function Chip({ children, color = '#8A8880', title }: { children: ReactNode; col
     >
       {children}
     </span>
+  );
+}
+
+function StoryCard({ item, now, open, wide, onToggle, onLocate }: {
+  item: StoryItem; now: number; open: boolean; wide?: boolean; onToggle: () => void; onLocate: (lat: number, lng: number, options?: LocateOptions) => void;
+}) {
+  const fresh = now - item.ts < 60 * 60_000;
+  const pinId = `story:${item.id}`;
+  return (
+    <article
+      className={`rounded-lg border border-l-2 transition-colors ${wide ? 'xl:col-span-2' : ''} ${open ? 'bg-[#15151A] border-[#3A3A38]' : 'bg-[#111111]/70 border-[#26262A] hover:bg-[#17171B] hover:border-[#34343A]'}`}
+      style={{ borderLeftColor: '#00E5FF' }}
+    >
+      <button type="button" onClick={onToggle} aria-expanded={open} className="w-full text-left px-2.5 pt-2 pb-2 outline-none focus-visible:ring-1 focus-visible:ring-white/30 rounded-lg">
+        <div className="flex items-start gap-2">
+          <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[9.5px] font-mono uppercase tracking-wider">
+            {fresh && <span className="w-1.5 h-1.5 rounded-full animate-osiris-pulse" style={{ background: '#00E5FF' }} title="Updated in the last hour" />}
+            <span className="normal-case text-[#00E5FF]">AskNews story</span>
+            <span className="text-[#8A8880]">{item.nArticles} articles</span>
+            {item.categories.slice(0, 2).map(c => <span key={c} className="text-[#8A8880]">{c}</span>)}
+          </div>
+          <time dateTime={new Date(item.ts).toISOString()} title={new Date(item.ts).toLocaleString()} className="flex-shrink-0 text-[9.5px] font-mono text-[#8A8880]">
+            {timeAgo(item.ts, now)}
+          </time>
+        </div>
+        <h4 className={`mt-1 font-sans text-[12.5px] font-medium leading-snug text-[#F2EFE8] ${open ? '' : 'line-clamp-3'}`}>{item.headline}</h4>
+        {item.takeaways.length > 0 && (
+          <ul className="mt-1 list-disc pl-3 text-[11px] text-[#9B978E]">{(open ? item.takeaways : item.takeaways.slice(0, 2)).map((point, index) => <li key={index}>{point}</li>)}</ul>
+        )}
+        {open && item.summary && <p className="mt-1.5 whitespace-pre-line font-sans text-[11px] leading-relaxed text-[#B5B2AA]">{item.summary}</p>}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          {item.place && <Chip color="#00E5FF" title="A place the story names, not a verified incident location">📍 {item.place.label} · place mentioned</Chip>}
+          {!item.place && item.locations.slice(0, 2).map(l => <Chip key={l}>{l}</Chip>)}
+        </div>
+      </button>
+      <div className="flex items-center gap-1 px-2 pb-2">
+        {item.coords && (
+          <button type="button" onClick={() => onLocate(item.coords![0], item.coords![1], { zoom: 6, alertId: pinId })} className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9.5px] font-mono text-[#8A8880] hover:bg-white/10 hover:text-white" aria-label="Show this story on the map">
+            <MapPin className="h-3 w-3" /> MAP
+          </button>
+        )}
+        <span className="ml-auto text-[9px] font-mono text-[#5C5A54]">{item.articles.length} ATTACHED</span>
+      </div>
+      {open && item.articles.length > 0 && (
+        <ul className="border-t border-[#26262A] px-2.5 py-2 space-y-1.5">
+          {item.articles.map(article => (
+            <li key={article.id} className="flex items-start gap-2 text-[11px]">
+              <div className="flex-1 min-w-0">
+                <div className="text-[#E8E6E0] leading-snug">{article.title}</div>
+                <div className="text-[9.5px] font-mono text-[#8A8880]">{article.source}{article.published ? ` · ${timeAgo(article.published, now)}` : ''} · via AskNews</div>
+              </div>
+              {article.coords && (
+                <button type="button" onClick={() => onLocate(article.coords![0], article.coords![1], { zoom: 8, alertId: article.id })} className="flex-shrink-0 p-1 rounded text-[#8A8880] hover:text-white hover:bg-white/10" aria-label="Show this article on the map">
+                  <MapPin className="h-3 w-3" />
+                </button>
+              )}
+              {article.link && (
+                <a href={article.link} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 p-1 rounded text-[var(--cyan-primary)] hover:bg-white/10" aria-label={`Open ${article.source || 'this article'}`}>
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </article>
   );
 }
 
@@ -721,6 +836,17 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed, onRefresh, pin
     () => (data.news ?? []).map(toNews).filter((n): n is NewsAlert => n !== null).sort((a, b) => b.ts - a.ts),
     [data.news],
   );
+  const stories = useMemo(
+    () => (data.stories ?? []).map(toStory).filter((s): s is StoryItem => s !== null).sort((a, b) => b.ts - a.ts),
+    [data.stories],
+  );
+  const storiesOn = data.stories !== undefined;
+  /* Stories are the AskNews layer's top-level view: the first time they
+     arrive, the panel opens on them. Adjusted during render, as React asks
+     for state that follows a prop; after that the reader's choice stands. */
+  const [storiesShown, setStoriesShown] = useState(false);
+  if (!storiesShown && stories.length) { setStoriesShown(true); setTab('stories'); }
+  if (storiesShown && !storiesOn) { setStoriesShown(false); if (tab === 'stories') setTab('all'); }
   const quakes = useMemo(
     () => (data.earthquakes ?? []).map(toQuake).filter((q): q is QuakeAlert => q !== null).sort((a, b) => b.ts - a.ts).slice(0, 15),
     [data.earthquakes],
@@ -776,12 +902,13 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed, onRefresh, pin
   const visibleQuakes = useMemo(() => quakes.filter(k => !q || k.place.toLowerCase().includes(q)), [quakes, q]);
   const visibleWarnings = useMemo(() => warnings.filter(w => !q || w.haystack.includes(q)), [warnings, q]);
   const visibleFeeds = useMemo(() => BUILTIN_FEEDS.filter(f => !q || `${f.name} ${f.city} ${f.country} ${f.category}`.toLowerCase().includes(q)), [q]);
+  const visibleStories = useMemo(() => stories.filter(s => !q || s.haystack.includes(q)), [stories, q]);
 
   const list: AlertItem[] = useMemo(() => {
     if (tab === 'news') return visibleNews;
     if (tab === 'warnings') return visibleWarnings;
     if (tab === 'quakes') return visibleQuakes;
-    if (tab === 'feeds') return [];
+    if (tab === 'feeds' || tab === 'stories') return [];
     /* Thread and perspective filters are about reports; warnings and quakes
        step aside while they apply. In the mixed list a severe warning leads
        its hour, since that is the one a reader has to act on. */
@@ -792,7 +919,7 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed, onRefresh, pin
 
   /* The reports the filters leave showing that have a place — what the map pins. */
   const pinned = useMemo(
-    () => (tab === 'quakes' || tab === 'feeds' ? [] : visibleNews.filter(n => n.place && n.coords)),
+    () => (tab === 'quakes' || tab === 'feeds' || tab === 'stories' ? [] : visibleNews.filter(n => n.place && n.coords)),
     [tab, visibleNews],
   );
   const pinnedKey = pinned.map(n => n.id).join(',');
@@ -868,6 +995,7 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed, onRefresh, pin
   }, [maximized, onLocate]);
 
   const tabs: { id: Tab; label: string; count: number }[] = [
+    ...(storiesOn ? [{ id: 'stories' as const, label: 'STORIES', count: stories.length }] : []),
     { id: 'all', label: 'ALL', count: news.length + quakes.length + warnings.length },
     { id: 'news', label: 'NEWS', count: news.length },
     { id: 'warnings', label: 'WARN', count: warnings.length },
@@ -961,7 +1089,7 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed, onRefresh, pin
           <input
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder={tab === 'feeds' ? 'Search feeds…' : 'Search headlines, places, channels…'}
+            placeholder={tab === 'feeds' ? 'Search feeds…' : tab === 'stories' ? 'Search stories, takeaways, places…' : 'Search headlines, places, channels…'}
             className="w-full rounded border border-[#2A2A28] bg-black/30 py-1 pl-6 pr-6 text-[11px] text-[#E8E6E0] placeholder:text-[#5C5A54] outline-none focus:border-[var(--cyan-primary)]/50"
           />
           {query && (
@@ -1034,7 +1162,29 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed, onRefresh, pin
     </div>
   );
 
-  const listBody = tab === 'feeds' ? (
+  const storiesStatus = data.stories_meta?.asknews?.status;
+  const listBody = tab === 'stories' ? (
+    visibleStories.length === 0 ? (
+      storiesStatus === 'loading' || storiesStatus === undefined
+        ? <EmptyState text="Reading AskNews stories…" />
+        : q ? <EmptyState text="No stories match this search" onClear={() => setQuery('')} />
+        : <EmptyState text={storiesStatus === 'ok' ? 'No stories updated in the last day' : `AskNews stories unavailable (${storiesStatus})`} />
+    ) : (
+      <div className={maximized ? 'grid gap-2 grid-cols-1 xl:grid-cols-2 items-start' : 'space-y-2'}>
+        {visibleStories.map(item => (
+          <StoryCard
+            key={item.id}
+            item={item}
+            now={now}
+            open={openId === item.id}
+            wide={maximized && openId === item.id}
+            onToggle={() => setOpenId(openId === item.id ? null : item.id)}
+            onLocate={locate}
+          />
+        ))}
+      </div>
+    )
+  ) : tab === 'feeds' ? (
     <div className="space-y-3">
       {Object.entries(FEED_REGIONS).map(([region, label]) => {
         const feeds = visibleFeeds.filter(f => f.region === region);

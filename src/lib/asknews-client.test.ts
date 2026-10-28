@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { askNewsHeaders, forgetAskNewsKey, loadAskNewsKey, saveAskNewsKey, subscribeAskNewsKey, createNewsLoader } from './asknews-client';
+import { askNewsHeaders, forgetAskNewsKey, loadAskNewsKey, saveAskNewsKey, subscribeAskNewsKey, createNewsLoader, createStoriesLoader } from './asknews-client';
 const storage = () => { const values = new Map<string, string>(); return { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => values.set(k, v), removeItem: (k: string) => values.delete(k) }; };
 afterEach(() => vi.unstubAllGlobals());
 it('keeps one key slot and notifies same-tab consumers on save and Forget', () => {
@@ -54,4 +54,26 @@ it('also discards the old generation when it finishes before the new request', a
   expect(sink.mock.lastCall?.[0].news).toEqual([]);
   completions[1](Response.json({ news: [{ title: 'Keep me', via: 'AskNews' }], asknews: { status: 'ok' } })); await second;
   expect(sink.mock.lastCall?.[0].news).toEqual([{ title: 'Keep me', via: 'AskNews' }]);
+});
+
+it('reads stories only while on, keeps a stale list through a transient failure and clears it on a rejected key', async () => {
+  const fetcher = vi.fn<typeof fetch>(); vi.stubGlobal('fetch', fetcher);
+  const sink = vi.fn(); const loader = createStoriesLoader(sink);
+  await loader.load(); expect(fetcher).not.toHaveBeenCalled();
+  loader.configure(true, { 'X-AskNews-Key': 'k' });
+  expect(sink.mock.lastCall?.[0]).toEqual({ stories: [], asknews: { status: 'loading', count: 0 } });
+  const story = { id: 'u', headline: 'A story' };
+  fetcher.mockResolvedValueOnce(Response.json({ stories: [story], asknews: { status: 'ok', count: 1 }, timestamp: 't' }));
+  await loader.load();
+  expect(new URL(String(fetcher.mock.calls[0][0]), 'http://x').pathname).toBe('/api/stories');
+  expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-AskNews-Key')).toBe('k');
+  expect(sink.mock.lastCall?.[0]).toMatchObject({ stories: [story], asknews: { status: 'ok' } });
+  fetcher.mockResolvedValueOnce(new Response('down', { status: 502 }));
+  await loader.load();
+  expect(sink.mock.lastCall?.[0]).toMatchObject({ stories: [story], asknews: { status: 'stale', count: 1 } });
+  fetcher.mockResolvedValueOnce(Response.json({ stories: [], asknews: { status: 'auth', count: 0 } }));
+  await loader.load();
+  expect(sink.mock.lastCall?.[0]).toMatchObject({ stories: [], asknews: { status: 'auth' } });
+  loader.configure(false, {});
+  expect(sink.mock.lastCall?.[0]).toEqual({ stories: [], asknews: { status: 'off', count: 0 } });
 });

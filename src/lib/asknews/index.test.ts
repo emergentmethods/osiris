@@ -3,25 +3,26 @@ import { askNewsFor } from './index';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-it('uses the installed SDK for two private pages and projects safe newest-first reporting', async () => {
+it('uses the installed SDK for one private page without an offset and projects safe newest-first reporting', async () => {
   vi.stubEnv('ASKNEWS_API_KEY', 'operator-key');
   const calls: { url: URL; init: RequestInit }[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input, init) => {
     const url = new URL(String(input));
     calls.push({ url, init });
-    return Response.json({ as_dicts: url.searchParams.get('offset') === '0' ? [
+    return Response.json({ as_dicts: [
       { article_id: 'old', title: 'Old report', article_url: 'https://publisher.test/old', pub_date: '2026-10-27T10:00:00Z', domain_url: 'publisher.test', key_points: ['A key point'], full_text: 'SECRET FULL TEXT', image_url: 'https://images.test/a' },
-    ] : [
       { article_id: 'new', title: 'New report', article_url: 'https://publisher.test/new', pub_date: '2026-10-27T11:00:00Z', domain_url: 'publisher.test' },
       { article_id: 'dup', title: 'Duplicate', article_url: 'https://publisher.test/old#fragment', pub_date: '2026-10-27T10:00:00Z' },
-    ] });
+    ], offset: '0003d30d-cc08-4ead-8a0b-bafcefffa08a' });
   }));
   const items = await askNewsFor(new Headers({ 'X-AskNews-Key': 'reader-key' })).latest();
   expect(items.map(a => a.title)).toEqual(['New report', 'Old report']);
-  expect(calls.map(c => c.url.searchParams.get('offset'))).toEqual(['0', '100']);
+  // A filter-only search answers 400 to any offset, so the feed is one page.
+  expect(calls).toHaveLength(1);
   for (const { url, init } of calls) {
     expect(url.origin).toBe('https://api.asknews.app');
     expect(url.pathname).toBe('/v1/news/search');
+    expect(url.searchParams.has('offset')).toBe(false);
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ n_articles: '100', time_filter: 'pub_date', page_rank: '200000', return_geo: 'true', podcasts: 'include', return_type: 'dicts' });
     expect(Number(url.searchParams.get('start_timestamp'))).toBeGreaterThan(Date.now() / 1000 - 1805);
     expect(url.searchParams.has('categories')).toBe(false);
@@ -84,7 +85,7 @@ it('preserves deterministic mentioned places and only fixture-supported Wikidata
 it('searches nearby through the real SDK using meters and configurable fake upstream without feed overrides', async () => {
   vi.stubEnv('ASKNEWS_API_KEY', 'operator-key');
   vi.stubEnv('ASKNEWS_API_BASE_URL', 'http://127.0.0.1:45678');
-  vi.stubEnv('ASKNEWS_FEED_SIZE', '200'); vi.stubEnv('ASKNEWS_FEED_WINDOW_SECONDS', '1');
+  vi.stubEnv('ASKNEWS_FEED_SIZE', '100'); vi.stubEnv('ASKNEWS_FEED_WINDOW_SECONDS', '1');
   const fetcher = vi.fn<typeof fetch>(async () => Response.json({ as_dicts: [] }));
   vi.stubGlobal('fetch', fetcher);
   await askNewsFor(new Headers()).near(35.68, 139.69);
@@ -115,4 +116,52 @@ it('cancels the nearby SDK request without a retry or leaked upstream exception'
   await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1)); controller.abort();
   await expect(pending).rejects.toMatchObject({ code: 'cancelled', message: 'AskNews request cancelled.' });
   expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+const storyPage = (ids: string[], offset: string | null, extra: Record<string, unknown> = {}) => ({ stories: ids.map(id => ({
+  uuid: id, updated_ts: 1_793_000_000, countries: { US: 3, Unknown: 9 }, categories: ['Politics'], locations: ['Gaza'],
+  updates: [{ headline: `Story ${id}`, story: 'What happened, told by operator-key.', story_update_ts: 1_793_000_000, key_takeaways: ['A point [1][2].'], n_articles: 40, locations: ['Rafah', 'Gaza'],
+    cluster_articles: [{ article_id: `${id}-1`, eng_title: 'Cluster article', article_url: `https://publisher.test/${id}/1`, pub_date: '2026-10-27T10:00:00Z', domain_url: 'publisher.test', full_text: 'SECRET FULL TEXT' }],
+    prompt_articles: [{ article_id: `${id}-1`, eng_title: 'Cluster article', article_url: `https://publisher.test/${id}/1#frag`, pub_date: '2026-10-27T10:00:00Z' }, { article_id: `${id}-2`, title: 'Prompt article', article_url: `https://publisher.test/${id}/2`, pub_date: '2026-10-27T09:00:00Z', geo_coordinates: { Rafah: { latitude: 31.29, longitude: 34.25 } } }],
+    ...extra }],
+}) ), offset });
+const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+it('pages stories by the returned cursor, keeps each story once at its newest update, and stops at the last page', async () => {
+  vi.stubEnv('ASKNEWS_API_KEY', 'operator-key'); vi.stubEnv('ASKNEWS_STORIES_SIZE', '25'); vi.stubEnv('ASKNEWS_STORIES_ARTICLES', '7');
+  const calls: URL[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (input, init) => {
+    const url = new URL(String(input)); calls.push(url);
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer operator-key');
+    const offset = url.searchParams.get('offset');
+    if (!offset) return Response.json(storyPage([uuid(1), uuid(2), uuid(3), uuid(4), uuid(5), uuid(6), uuid(7), uuid(8), uuid(9), uuid(10)], 'cursor-2'));
+    if (offset === 'cursor-2') return Response.json(storyPage([uuid(10), uuid(11), uuid(12)], 'cursor-3'));
+    return Response.json(storyPage([], null));
+  }));
+  const stories = await askNewsFor(new Headers()).stories();
+  expect(calls.map(u => u.searchParams.get('offset'))).toEqual([null, 'cursor-2', 'cursor-3']);
+  for (const url of calls) {
+    expect(url.pathname).toBe('/v1/stories');
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({ limit: '10', expand_updates: 'true', max_updates: '1', max_articles: '7', obj_type: 'story_update' });
+    expect(Number(url.searchParams.get('start_timestamp'))).toBeGreaterThan(Date.now() / 1000 - 86405);
+  }
+  expect(stories).toHaveLength(12);
+  expect(stories.map(s => s.id)).toContain(uuid(10));
+  const first = stories[0];
+  expect(first).toMatchObject({ headline: `Story ${first.id}`, key_takeaways: ['A point.'], countries: ['US'], locations: ['Rafah', 'Gaza'], n_articles: 40, via: 'AskNews', place: { name: 'Rafah', precision: 'mentioned-place' }, coords: [31.29, 34.25] });
+  expect(first.articles.map(a => a.title)).toEqual(['Cluster article', 'Prompt article']);
+  expect(first.summary).toBe('What happened, told by [redacted].');
+  expect(JSON.stringify(stories)).not.toMatch(/SECRET FULL TEXT|operator-key/);
+});
+
+it('stops the stories pull at the configured size and maps upstream failures to codes', async () => {
+  vi.stubEnv('ASKNEWS_API_KEY', 'operator-key'); vi.stubEnv('ASKNEWS_STORIES_SIZE', '10');
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json(storyPage(Array.from({ length: 10 }, (_, i) => uuid(i + 1)), 'cursor-2')));
+  vi.stubGlobal('fetch', fetcher);
+  expect(await askNewsFor(new Headers()).stories()).toHaveLength(10);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  fetcher.mockResolvedValueOnce(new Response('quota', { status: 402 }));
+  await expect(askNewsFor(new Headers()).stories()).rejects.toMatchObject({ code: 'quota' });
+  await expect(askNewsFor(new Headers({ 'X-AskNews-Key': '' })).stories()).rejects.toMatchObject({ code: 'auth' });
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });

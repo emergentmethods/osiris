@@ -114,9 +114,9 @@ Osiris is a production-grade OSINT platform that provides situational awareness 
 
 AskNews is optional and defaults off. Turn on **AskNews** in the layer panel to enter a key. Save uses sessionStorage, or localStorage when **Remember** is selected. **Forget** clears both. Saving a key does not enable the source. Turning the source off removes its feed items, mentioned-place pins, and nearby dossier reporting without deleting the key used by explicit OI requests.
 
-Intel Feed and desktop LiveAlerts show titles, publisher names, publication times, key points, and original links labelled "via AskNews". Pins say "place mentioned", not a verified incident location. Region Dossier searches within 50,000 meters over 24 hours for up to 10 items. AskNews images and full text are excluded.
+With the layer on, the desktop Live Alerts panel opens on a **Stories** tab: the narratives AskNews updated in the last 24 hours, newest first, each with its headline, key takeaways, the story text and its latest articles. Each story is pinned on the map at the first place it names that resolves, or at an article's own coordinates when the API supplies them. Pulled every ten minutes as up to ten `/v1/stories` pages of ten. Intel Feed and desktop LiveAlerts show titles, publisher names, publication times, key points, and original links labelled "via AskNews". Pins say "place mentioned", not a verified incident location. Region Dossier, opened by the **Reporting here** toolbar button for the view centre or by a double right-click on the map, searches within 50,000 meters over 24 hours for up to 10 items and pins them on the map. Pins from each lookup stay until the AskNews layer is turned off. AskNews images and full text are excluded.
 
-The feed uses `time_filter=pub_date`, the last 30 minutes through `start_timestamp=now-1800`, `page_rank=200000`, geo data, included podcasts, and no category filter. Its 200 items require two searches of 100 items at offsets 0 and 100. Every five-minute visible-tab poll costs two searches per reader at those defaults. Manual refresh also searches. The environment overrides below can reduce the window or item count.
+The feed uses `time_filter=pub_date`, the last 30 minutes through `start_timestamp=now-1800`, `page_rank=200000`, geo data, included podcasts, and no category filter. Its 100 items come from one search; a search with no query or geo filter cannot be paged, and a page holds at most 100 items. Every five-minute visible-tab poll costs one search per reader at those defaults. Manual refresh also searches. The environment overrides below can reduce the window or item count.
 
 Assist discovers the live AskNews MCP catalog and lets the model choose `asknews {tool,args}` actions. Forecast's existing planner can select zero to four calls, executed two at a time when live research is enabled. Neither feature forces a paid call or DeepNews. Calls use the key owner's included usage or wallet at AskNews rates, so Forecast has no fixed AskNews price. Reporting retains "via AskNews" attribution. Generated overviews say "AskNews DeepNews synthesis". Forecast uses `an1` for the combined synthesis note and `an2` for the reference note, alongside article `wN` source ids. All AskNews-derived quotations are Paraphrase, even when wording matches a headline or key point.
 
@@ -224,7 +224,10 @@ Leave `ASKNEWS_API_KEY` unset to require each reader's own key. If you set it, i
 | `ASKNEWS_API_KEY` | Unset | Operator fallback key |
 | `ASKNEWS_FEED_WINDOW_SECONDS` | `1800` | Integer from 1 to 604800 |
 | `ASKNEWS_FEED_PAGE_RANK` | `200000` | Integer from 0 to 1000000000 |
-| `ASKNEWS_FEED_SIZE` | `200` | Integer from 1 to 200, in pages of at most 100 |
+| `ASKNEWS_FEED_SIZE` | `100` | Integer from 1 to 100, one page |
+| `ASKNEWS_STORIES_WINDOW_SECONDS` | `86400` | Integer from 1 to 604800 |
+| `ASKNEWS_STORIES_SIZE` | `100` | Integer from 1 to 100, in pages of 10 |
+| `ASKNEWS_STORIES_ARTICLES` | `5` | Articles attached per story, 1 to 20 |
 | `ASKNEWS_API_BASE_URL` | `https://api.asknews.app` | Trusted test/self-host REST endpoint override |
 | `ASKNEWS_MCP_URL` | `https://mcp.asknews.app/` | Trusted test/self-host MCP endpoint override |
 

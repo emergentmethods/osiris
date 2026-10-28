@@ -1,4 +1,5 @@
 import { mergeNews, type AskNewsStatus } from './asknews/domain';
+import type { AskNewsStory } from './asknews/stories';
 const SLOT = 'osiris.asknews.key';
 const CHANGED = 'osiris:asknews-key';
 export interface AskNewsKeyState { key: string; remember: boolean }
@@ -72,6 +73,53 @@ export function createNewsLoader(write: (body: DashboardNewsBody) => void) {
           publish({ ...next, news: mergeNews(next.news.filter(n => n.via !== 'AskNews'), previous) });
           applyFailure(status);
         } else publish(next);
+      } catch { if (!controller?.signal.aborted) applyFailure('unavailable'); }
+    },
+    dispose: invalidate,
+  };
+}
+
+export interface DashboardStoriesBody {
+  stories: AskNewsStory[];
+  timestamp?: string;
+  asknews?: { status: AskNewsStatus; count?: number };
+}
+/**
+ * Reads /api/stories for the AskNews layer, the way createNewsLoader reads
+ * the feed: a stale result stays up through a transient failure, a rejected
+ * or missing key clears it, and turning the source off empties it at once.
+ */
+export function createStoriesLoader(write: (body: DashboardStoriesBody) => void) {
+  let generation = 0;
+  let controller: AbortController | undefined;
+  let enabled = false;
+  let headers: Record<string, string> = {};
+  let body: DashboardStoriesBody = { stories: [] };
+  const publish = (next: DashboardStoriesBody) => { body = next; write(next); };
+  const invalidate = () => { generation++; controller?.abort(); };
+  return {
+    configure(on: boolean, nextHeaders: Record<string, string>) {
+      invalidate(); enabled = on; headers = nextHeaders;
+      publish({ stories: [], asknews: { status: on ? 'loading' : 'off', count: 0 } });
+    },
+    async load(skipWhenHidden = false) {
+      if (!enabled) return;
+      if (skipWhenHidden && typeof document !== 'undefined' && document.hidden) return;
+      invalidate(); const current = generation;
+      controller = new AbortController();
+      const applyFailure = (status: AskNewsStatus) => {
+        if (current !== generation) return;
+        const retain = !['auth', 'missing-key', 'forbidden', 'quota'].includes(status) && body.stories.length > 0;
+        publish({ ...body, stories: retain ? body.stories : [], asknews: { status: retain ? 'stale' : status, count: retain ? body.stories.length : 0 } });
+      };
+      try {
+        const response = await fetch('/api/stories', { headers, signal: controller.signal, cache: 'no-store' });
+        if (current !== generation) return;
+        if (!response.ok) { applyFailure('unavailable'); return; }
+        const next: DashboardStoriesBody = await response.json();
+        if (current !== generation) return;
+        if (next.asknews?.status !== 'ok') applyFailure(next.asknews?.status ?? 'unavailable');
+        else publish({ ...next, stories: Array.isArray(next.stories) ? next.stories : [] });
       } catch { if (!controller?.signal.aborted) applyFailure('unavailable'); }
     },
     dispose: invalidate,

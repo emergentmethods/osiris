@@ -243,7 +243,16 @@ export const API_GROUPS: ApiGroup[] = [
         params: [{ name: 'asknews', desc: '1 composes reader-owned AskNews reporting with the public feed.', example: '1' }, { name: 'probe', desc: 'asknews returns only operator configuration status without searching.' }],
         headers: { 'X-AskNews-Key': '$ASKNEWS_API_KEY' },
         env: ['ASKNEWS_API_KEY', 'ASKNEWS_FEED_WINDOW_SECONDS', 'ASKNEWS_FEED_PAGE_RANK', 'ASKNEWS_FEED_SIZE', 'ASKNEWS_API_BASE_URL'],
-        notes: '`asknews=1` uses `X-AskNews-Key` before the operator fallback `ASKNEWS_API_KEY`. Any visitor to a public fallback instance can spend operator credits. Defaults are `time_filter=pub_date`, `start_timestamp=now-1800`, `page_rank=200000`, geo data, included podcasts, no category filter and 200 items in two searches at offsets 0 and 100. Override with `ASKNEWS_FEED_WINDOW_SECONDS` (1800), `ASKNEWS_FEED_PAGE_RANK` (200000) and `ASKNEWS_FEED_SIZE` (200). Each five-minute visible-tab poll costs two searches per reader at defaults. Private, no-store, including probe and failure responses. Does not mutate the public cache. Titles, publisher, time, key points and original links say via AskNews. No images or full text. AskNews coordinates mean place mentioned.',
+        notes: '`asknews=1` uses `X-AskNews-Key` before the operator fallback `ASKNEWS_API_KEY`. Any visitor to a public fallback instance can spend operator credits. Defaults are `time_filter=pub_date`, `start_timestamp=now-1800`, `page_rank=200000`, geo data, included podcasts, no category filter and 100 items in one search, the most a page holds. A search with no query or geo filter cannot be paged. Override with `ASKNEWS_FEED_WINDOW_SECONDS` (1800), `ASKNEWS_FEED_PAGE_RANK` (200000) and `ASKNEWS_FEED_SIZE` (100). Each five-minute visible-tab poll costs one search per reader at defaults. Private, no-store, including probe and failure responses. Does not mutate the public cache. Titles, publisher, time, key points and original links say via AskNews. No images or full text. AskNews coordinates mean place mentioned.',
+      },
+      {
+        path: '/api/stories',
+        method: 'GET',
+        summary: 'AskNews stories updated in the last 24 hours, newest first, each with its latest articles and a map place.',
+        returns: ['stories', 'asknews.status', 'asknews.count', 'timestamp'],
+        headers: { 'X-AskNews-Key': '$ASKNEWS_API_KEY' },
+        env: ['ASKNEWS_API_KEY', 'ASKNEWS_STORIES_WINDOW_SECONDS', 'ASKNEWS_STORIES_SIZE', 'ASKNEWS_STORIES_ARTICLES', 'ASKNEWS_API_BASE_URL'],
+        notes: 'Uses `X-AskNews-Key` before the operator fallback `ASKNEWS_API_KEY`. Reads `/v1/stories` ten at a time by cursor until `ASKNEWS_STORIES_SIZE` (100) stories or the window (86400 s) is exhausted, keeping each story once at its newest update with `ASKNEWS_STORIES_ARTICLES` (5) articles. A story whose articles carry no coordinates is pinned at the first of its named places that resolves to a settlement through the shared Nominatim budget. Private, no-store. Failures answer 200 with `asknews.status` set to the error code and no stories. No images or full text.',
       },
       {
         path: '/api/live-news',

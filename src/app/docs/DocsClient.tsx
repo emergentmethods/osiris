@@ -464,7 +464,7 @@ docker compose up -d`}</Pre>
                 },
                 {
                   k: 'Region Dossier',
-                  v: 'Double right-click the map for a composite summary of that location from every feed covering it.',
+                  v: 'Double right-click the map, or press the Reporting here toolbar button for the view centre, for a composite summary of that location from every feed covering it.',
                 },
                 {
                   k: 'Entity Graph',
@@ -520,11 +520,18 @@ docker compose up -d`}</Pre>
             <p>
               The feed defaults to <Code>time_filter=pub_date</Code>, the last 30 minutes through{' '}
               <Code>start_timestamp=now-1800</Code>, <Code>page_rank=200000</Code>, geo data, included podcasts,
-              and no category filter. It requests 200 items as two pages of 100 at offsets 0 and 100. Each five-minute
-              visible-tab poll costs two searches per reader at these defaults. Manual refresh also searches.
+              and no category filter. It requests 100 items in one search, the most a page holds; a search with no query
+              or geo filter cannot be paged. Each five-minute visible-tab poll costs one search per reader at these
+              defaults. Manual refresh also searches.
               Self-hosters can override <Code>ASKNEWS_FEED_WINDOW_SECONDS=1800</Code>,{' '}
-              <Code>ASKNEWS_FEED_PAGE_RANK=200000</Code>, and <Code>ASKNEWS_FEED_SIZE=200</Code>.
+              <Code>ASKNEWS_FEED_PAGE_RANK=200000</Code>, and <Code>ASKNEWS_FEED_SIZE=100</Code>.
               Nearby reporting uses 50,000 meters, 24 hours, and 10 items, independently of country facts.
+            </p>
+            <p>
+              Stories are the layer&apos;s top-level view: the narratives AskNews updated in the last 24 hours, up to 100 in
+              pages of 10 through <Code>/api/stories</Code>, pulled every ten minutes with <Code>ASKNEWS_STORIES_ARTICLES=5</Code>{' '}
+              articles attached each. A story is pinned where its articles carry coordinates, or else at the first named place
+              that resolves. Override <Code>ASKNEWS_STORIES_WINDOW_SECONDS=86400</Code> and <Code>ASKNEWS_STORIES_SIZE=100</Code>.
             </p>
             <p>
               Assist discovers the AskNews MCP catalog and lets the model select <Code>asknews {'{tool,args}'}</Code>.
