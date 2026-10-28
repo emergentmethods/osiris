@@ -1,5 +1,5 @@
 import { assistStep } from '@/lib/oi/assist/server';
-import { credentials, disabled, disabledResponse, fail, json, limited, readBody } from '@/lib/oi/service';
+import { credentials, disabled, json, limited, readBody } from '@/lib/oi/service';
 
 /**
  * OSIRIS OI Assist — one step of the conversation.
@@ -15,15 +15,17 @@ import { credentials, disabled, disabledResponse, fail, json, limited, readBody 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+const privateJson = (body: unknown, status = 200) => json(body, status, { 'Cache-Control': 'private, no-store' });
+
 export async function POST(req: Request) {
-  if (disabled()) return disabledResponse();
-  if (limited(req, 'assist', 40)) return fail(429, 'Too many steps in a minute. Wait a moment.');
+  if (disabled()) return privateJson({ error: 'OI is switched off on this server.' }, 503);
+  if (limited(req, 'assist', 40)) return privateJson({ error: 'Too many steps in a minute. Wait a moment.' }, 429);
   const body = await readBody(req, 96_000);
-  if (!body) return fail(400, 'Send a JSON body: { "messages": [...], "context": {...} }.');
+  if (!body) return privateJson({ error: 'Send a JSON body: { "messages": [...], "context": {...} }.' }, 400);
   const creds = credentials(req, body);
-  if ('error' in creds) return fail(400, creds.error);
+  if ('error' in creds) return privateJson({ error: creds.error }, 400);
 
   const out = await assistStep(body, creds, req.signal);
-  if (!out.ok) return fail(out.status, out.error);
-  return json({ step: { say: out.step.say, actions: out.step.calls, done: out.step.done }, usage: out.usage });
+  if (!out.ok) return privateJson({ error: out.error }, out.status);
+  return privateJson({ step: { say: out.step.say, actions: out.step.calls, done: out.step.done }, usage: out.usage });
 }

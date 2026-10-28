@@ -9,6 +9,8 @@
  * and, where there is something to see, a card for the reader.
  */
 import type { Call, CallResult } from './protocol';
+import type { AskNewsCall, AskNewsOutput } from '../../asknews/mcp-domain';
+import { ASKNEWS_STATUS } from '../../asknews/domain';
 import { FIND_LAYERS, LAYERS, PANELS, SOURCES, find, frame, loaded, scan, type Bounds, type Entity, type FindLayer, type Point } from './catalog';
 import { countWords, describeFrame, describeWatch, forModel, type FrameAnalysis, type WatchSummary } from '../../vision/analysis';
 import { sourceOf, type VisionCamera } from '../../vision/source';
@@ -27,6 +29,7 @@ export type Depth = 'quick' | 'standard' | 'deep';
 
 /** What the page lets the assistant do. */
 export interface Site {
+  asknews?(call: AskNewsCall, signal?: AbortSignal): Promise<AskNewsOutput>;
   data(): Record<string, unknown>;
   view(): { lat: number; lng: number; zoom: number; projection: 'globe' | 'mercator'; style: string; bounds?: Bounds };
   layers(): Record<string, boolean>;
@@ -59,10 +62,10 @@ export type WorkspaceView = 'globe' | 'graph' | 'timeline' | 'table';
 
 /** Something for the reader to look at in the conversation. */
 export interface Card {
-  kind: 'find' | 'show' | 'markets' | 'forecast' | 'place' | 'scan' | 'camera';
+  kind: 'find' | 'show' | 'markets' | 'forecast' | 'place' | 'scan' | 'camera' | 'asknews';
   title: string;
   subtitle?: string;
-  items: { label: string; detail?: string; lat?: number; lng?: number; url?: string; value?: string; tone?: 'up' | 'down' }[];
+  items: { label: string; detail?: string; keyPoints?: string[]; note?: string; lat?: number; lng?: number; url?: string; value?: string; tone?: 'up' | 'down' }[];
   /** A forecast card follows the run it started. */
   runId?: string;
 }
@@ -184,6 +187,21 @@ export function quotesOf(markets: unknown): { name: string; symbol: string; grou
 export async function runCall(call: Call, site: Site, signal?: AbortSignal): Promise<Outcome> {
   const a = call.args;
   switch (call.tool) {
+    case 'asknews': {
+      if (!site.asknews || typeof a.tool !== 'string' || !a.args || typeof a.args !== 'object' || Array.isArray(a.args)) return fail('asknews', ASKNEWS_STATUS['bad-input']);
+      try {
+        const output = await site.asknews({ tool: a.tool, args: a.args as Record<string, unknown> }, signal);
+        return ok('asknews', `${output.articles.length} articles via AskNews. ${output.notes.length} notes. Paraphrase only.`, output,
+          { kind: 'asknews', title: 'Reporting via AskNews', subtitle: output.articles.some(a => a.coords) ? 'Paraphrase · place mentioned' : 'Paraphrase', items: [
+            ...output.articles.map(article => ({ label: article.title, detail: [article.source_name, article.published].filter(Boolean).join(' · '), keyPoints: article.key_points, url: article.link,
+              ...(article.coords ? { lat: article.coords[0], lng: article.coords[1] } : {}) })),
+            ...output.notes.map(note => ({ label: note.title, note: note.text })),
+          ] });
+      } catch (error) {
+        const message = error instanceof Error && Object.values(ASKNEWS_STATUS).includes(error.message) ? error.message : ASKNEWS_STATUS.unavailable;
+        return fail('asknews', signal?.aborted ? ASKNEWS_STATUS.cancelled : message);
+      }
+    }
     case 'go_to': {
       const coords = point(a);
       const place = coords ? { name: str(a.place) || `${coords.lat.toFixed(2)}, ${coords.lng.toFixed(2)}`, ...coords } : await placeOf(site, a.place);

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { ATTRIBUTION } from '@/lib/nominatim';
 import { httpJson } from '@/lib/httpJson';
 import { cachedSource } from '@/lib/sourceCache';
+import { askNewsFor, AskNewsError } from '@/lib/asknews';
+import type { AskNewsArticle, AskNewsStatus } from '@/lib/asknews/domain';
 
 /**
  * OSIRIS — Region Dossier API
@@ -178,16 +180,28 @@ async function readCountry(countryName: string): Promise<CountryFacts[]> {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const lat = parseFloat(searchParams.get('lat') || '0');
-  const lng = parseFloat(searchParams.get('lng') || '0');
+  const includeAskNews = searchParams.get('asknews') === '1';
+  const lat = includeAskNews ? Number(searchParams.get('lat')) : parseFloat(searchParams.get('lat') || '0');
+  const lng = includeAskNews ? Number(searchParams.get('lng')) : parseFloat(searchParams.get('lng') || '0');
+  const privateHeaders = { 'Cache-Control': 'private, no-store' };
+  if (includeAskNews && (!searchParams.get('lat')?.trim() || !searchParams.get('lng')?.trim()
+    || !Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180)) {
+    return NextResponse.json({ error: 'Invalid coordinates' }, { status: 400, headers: privateHeaders });
+  }
+  const nearby: Promise<{ status: AskNewsStatus; articles: AskNewsArticle[] } | undefined> = includeAskNews
+    ? askNewsFor(request.headers).near(lat, lng, request.signal)
+      .then(articles => ({ status: 'ok' as const, articles }))
+      .catch(error => ({ status: error instanceof AskNewsError ? error.code : 'unavailable', articles: [] }))
+    : Promise.resolve(undefined);
 
   try {
     // Step 1: Which place was clicked (must complete first — other steps depend on it).
-    const place = await placeAt(lat, lng);
+    const naming = placeAt(lat, lng);
+    const place = await (includeAskNews ? naming.catch(() => null) : naming);
 
     let countryName = '';
     let countryCode = '';
-    let locationInfo: any = {};
+    let locationInfo: { city?: string; state?: string; country?: string; country_code?: string; display_name?: string } = {};
 
     if (place) {
       countryName = place.country || '';
@@ -213,7 +227,7 @@ export async function GET(request: Request) {
         try {
           const res = await fetch(
             `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiQuery)}`,
-            { signal: AbortSignal.timeout(5000) }
+            { signal: AbortSignal.any([request.signal, AbortSignal.timeout(5000)]) }
           );
           if (res.ok) {
             const wiki = await res.json();
@@ -241,7 +255,9 @@ export async function GET(request: Request) {
     const countryData = facts?.country ?? null;
     const headOfState = facts?.head_of_state ?? null;
 
+    const asknews = await nearby;
     return NextResponse.json({
+      ...(asknews ? { asknews } : {}),
       coordinates: { lat, lng },
       location: locationInfo,
       country: countryData,
@@ -256,13 +272,14 @@ export async function GET(request: Request) {
            is either open sea or a lookup that failed — Photon has its bad
            moments — and cached publicly it would be handed back for an hour,
            stale-while-revalidate, to the next click on that spot. */
-        'Cache-Control': place
+        'Cache-Control': includeAskNews ? 'private, no-store' : place
           ? 'public, s-maxage=3600, stale-while-revalidate=7200'
           : 'no-store',
       },
     });
   } catch (error) {
     console.error('Region dossier error:', error);
-    return NextResponse.json({ error: 'Failed to fetch region data' }, { status: 500 });
+    const asknews = await nearby;
+    return NextResponse.json({ error: 'Failed to fetch region data', ...(asknews ? { asknews } : {}) }, { status: 500, headers: includeAskNews ? privateHeaders : { 'Cache-Control': 'no-store' } });
   }
 }

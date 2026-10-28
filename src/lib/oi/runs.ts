@@ -62,6 +62,7 @@ const g = globalThis as unknown as { __osirisOi?: Store };
 const store: Store = (g.__osirisOi ??= { runs: new Map(), starts: new Map() });
 
 export interface StartInput {
+  asknews?: EngineDeps['asknews'];
   question: string;
   seed: string;
   seedScope?: SeedScope;
@@ -158,6 +159,7 @@ export function startRun(input: StartInput, deps: StartDeps = {}): StartResult {
     { question: input.question, seed: input.seed, seedScope: input.seedScope, depth: input.depth, useFeeds: input.useFeeds },
     {
       chat,
+      asknews: input.asknews,
       concurrency: deps.concurrency ?? providerInfo(input.provider).concurrency,
       emit: e => emit(run, e),
       signal: run.abort.signal,
@@ -175,7 +177,7 @@ export function startRun(input: StartInput, deps: StartDeps = {}): StartResult {
       }
       const raw = run.abort.signal.aborted && reason instanceof Error ? reason.message
         : err instanceof FatalError || err instanceof Error ? err.message : 'The run failed.';
-      emit(run, { t: 'end', status: 'failed', message: scrub(raw, key).slice(0, 300) });
+      emit(run, { t: 'end', status: 'failed', message: scrub(input.asknews?.scrub(raw) ?? raw, key).slice(0, 300) });
     },
   ).finally(() => {
     clearTimeout(deadline);

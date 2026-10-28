@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { desksFor, parsePlan, planFallback, searchWords, tickersIn, type ResearchPlan } from './plan';
 import { articleText, clipText, currentEventsDate, decodeEntities, parseCurrentEvents, parseGdelt, parseWikipedia, pickArticles, researchWeb, resetGdeltPause, type Fetcher, type GdeltArticle } from './web';
 
@@ -172,4 +172,51 @@ describe('GDELT, when it refuses', () => {
     expect(gdelt).toBe(1);
     resetGdeltPause();
   });
+});
+
+describe('AskNews research planning', () => {
+  const catalog = [{ name: 'InventedCase', description: 'fixture', inputSchema: { type: 'object' } }];
+  it('accepts only bounded model-selected catalog calls, never fallback calls', () => {
+    const call = { tool: 'InventedCase', args: { query: 'envoys' } };
+    const parsed = parsePlan({ asknews: [call, { tool: 'inventedcase', args: {} }, { tool: 'InventedCase', args: [] }, { tool: 'InventedCase', args: { q: 'x'.repeat(4097) } }, ...Array(5).fill(call)] }, 'envoys', catalog);
+    expect(parsed.asknews).toEqual(Array(4).fill(call));
+    expect(parsePlan(null, 'envoys', catalog).asknews).toEqual([]);
+    expect(parsePlan({ asknews: [call] }, 'envoys').asknews).toEqual([]);
+  });
+});
+
+describe('AskNews combined research', () => {
+  it('alternates before the cap, prefers AskNews duplicate URLs, does not scrape AskNews-only URLs, and combines bounded notes', async () => {
+    resetGdeltPause();
+    const api: Fetcher = async url => new Response(JSON.stringify(url.includes('gdeltproject') ? { articles: [
+      { url: 'https://shared.example/story#old', title: 'Public duplicate', domain: 'shared.example', language: 'English' },
+      { url: 'https://public.example/story', title: 'Open web retained', domain: 'public.example', language: 'English' },
+      { url: 'https://extra.example/story', title: 'Beyond cap', domain: 'extra.example', language: 'English' },
+    ] } : { query: { pages: [] } }));
+    const scraped: string[] = [];
+    const page: Fetcher = async url => { scraped.push(url); return new Response('<p>Envoys agreed the framework in Geneva after a week of talks and said the remaining chapters would be settled.</p>', { headers: { 'content-type': 'text/html' } }); };
+    const article = (link: string, title: string) => ({ id: `asknews:${link}`, title, link, source: 'Wire', source_name: 'Wire', published: '', key_points: ['Summary wording '.repeat(80)], via: 'AskNews' as const, place: null, coords: null });
+    const output = { articles: [article('https://shared.example/story', 'AskNews preferred'), article('https://private.example/story', 'Second private')], notes: [{ kind: 'synthesis' as const, title: 'AskNews DeepNews synthesis', text: 's'.repeat(3500) }, { kind: 'reference' as const, title: 'AskNews reference', text: 'Reference' }] };
+    const { items } = await researchWeb(plan({ news: ['Envoys Geneva'] }), 'Will envoys agree?', 3, new AbortController().signal, { api, page, gdeltGapMs: 0 }, Promise.resolve({ outputs: [output, { articles: [], notes: output.notes }] }));
+    const reporting = items.filter(i => i.id.startsWith('w'));
+    expect(reporting.map(i => [i.id, i.title])).toEqual([['w1', 'AskNews preferred'], ['w2', 'Open web retained'], ['w3', 'Second private']]);
+    expect(reporting[0]).toMatchObject({ provenance: 'asknews', source: 'Wire via AskNews', published: '' });
+    expect(reporting[0].excerpt!.length).toBeLessThanOrEqual(520);
+    expect(scraped.some(url => url.includes('private.example'))).toBe(false);
+    const notes = items.filter(i => i.provenance === 'asknews' && !i.id.startsWith('w'));
+    expect(notes.map(i => i.title)).toEqual(['AskNews DeepNews synthesis', 'AskNews reference']);
+    expect(notes[0].excerpt).toHaveLength(4000);
+    expect(items.map(i => i.id).length).toBe(new Set(items.map(i => i.id)).size);
+  });
+});
+
+it('reads open-web pages while AskNews is still pending', async () => {
+  resetGdeltPause();
+  let finish!: (value: { outputs: [] }) => void;
+  const asknews = new Promise<{ outputs: [] }>(resolve => { finish = resolve; });
+  let read = false;
+  const api: Fetcher = async url => Response.json(url.includes('gdeltproject') ? { articles: [{ url: 'https://public.example/parallel', title: 'Envoys Geneva', domain: 'public.example', language: 'English' }] } : { query: { pages: [] } });
+  const pending = researchWeb(plan({ news: ['Envoys Geneva'] }), 'Will envoys agree?', 3, new AbortController().signal, { api, page: async () => { read = true; return new Response('No article'); }, gdeltGapMs: 0 }, asknews);
+  try { await vi.waitFor(() => expect(read).toBe(true), { timeout: 200 }); }
+  finally { finish({ outputs: [] }); await pending; }
 });

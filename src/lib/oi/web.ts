@@ -28,6 +28,8 @@ import { namesIn, type ResearchPlan } from './plan';
 import { fetchSeries, ladderOf, oddsLine, pickOdds, searchMarkets } from './markets';
 import { searchNewsroom } from './newsroom';
 import { priceText, recent, seriesStats, type Series } from './quant';
+import { safeNewsUrl } from '../asknews/domain';
+import type { AskNewsOutput } from '../asknews/mcp-domain';
 import type { ContextItem } from './types';
 
 export { parsePlan, planFallback, searchWords, type ResearchPlan } from './plan';
@@ -375,6 +377,8 @@ async function each<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): 
   return out;
 }
 
+export interface AskNewsResearch { outputs: AskNewsOutput[] }
+
 /** What the research found: its sources, and the price histories behind any market data among them. */
 export interface Research {
   items: ContextItem[];
@@ -415,7 +419,7 @@ function namesFor(plan: ResearchPlan, question: string): string[] {
  * market data as `q1`…, prediction markets as `m1`…, then background as
  * `b1`, `b2`…, from Wikipedia.
  */
-export async function researchWeb(plan: ResearchPlan, question: string, limit: number, signal: AbortSignal, deps: WebDeps = liveWeb): Promise<Research> {
+export async function researchWeb(plan: ResearchPlan, question: string, limit: number, signal: AbortSignal, deps: WebDeps = liveWeb, asknews?: Promise<AskNewsResearch>): Promise<Research> {
   const words = terms(question, ...plan.news);
   const names = namesFor(plan, question);
   const [room, gdelt, events, background, series, markets] = await Promise.all([
@@ -429,16 +433,20 @@ export async function researchWeb(plan: ResearchPlan, question: string, limit: n
     Promise.all(plan.markets.slice(0, 3).map(q => searchMarkets(q, deps.api, signal).catch(() => []))),
   ]);
 
-  // Read a few more than are kept: some sites refuse, and those that answer come first.
   const picked = pickArticles([room, gdelt, events], limit + 4);
-  const read = await each(picked, 4, a => readArticle(a, words, deps, signal));
+  const reading = each(picked, 4, a => readArticle(a, words, deps, signal));
+  const [privateResearch, read] = await Promise.all([asknews, reading]);
+  const privateArticles: ContextItem[] = (privateResearch?.outputs ?? []).flatMap(out => out.articles).map(a => ({
+    id: '', kind: 'web', provenance: 'asknews', title: a.title, source: `${a.source} via AskNews`, published: a.published,
+    place: a.place?.name ?? '', lat: a.coords?.[0] ?? null, lng: a.coords?.[1] ?? null,
+    url: a.link, excerpt: a.key_points.join(' ').slice(0, 520),
+  }));
   const excerptOf = (i: number) => read[i]?.excerpt || picked[i].summary || '';
   const ranked = picked.map((a, i) => ({ a, r: read[i], excerpt: excerptOf(i) }))
-    .sort((x, y) => Number(Boolean(y.r?.excerpt)) - Number(Boolean(x.r?.excerpt)) || Number(Boolean(y.excerpt)) - Number(Boolean(x.excerpt)))
-    .slice(0, limit);
+    .sort((x, y) => Number(Boolean(y.r?.excerpt)) - Number(Boolean(x.r?.excerpt)) || Number(Boolean(y.excerpt)) - Number(Boolean(x.excerpt)));
 
-  const items: ContextItem[] = ranked.map(({ a, r, excerpt }, i) => ({
-    id: `w${i + 1}`,
+  const publicArticles: ContextItem[] = ranked.map(({ a, r, excerpt }) => ({
+    id: '',
     kind: 'web',
     title: a.title,
     // An event Wikipedia summarised keeps both names: its words are Wikipedia's, its report the outlet's.
@@ -450,6 +458,25 @@ export async function researchWeb(plan: ResearchPlan, question: string, limit: n
     url: a.url,
     ...(excerpt ? { excerpt } : {}),
   }));
+  const privateUrls = new Set(privateArticles.map(a => safeNewsUrl(a.url)).filter(Boolean));
+  const publicOnly = publicArticles.filter(a => !privateUrls.has(safeNewsUrl(a.url)));
+  const items: ContextItem[] = [];
+  const reportingUrls = new Set<string>();
+  for (let i = 0; i < Math.max(privateArticles.length, publicOnly.length) && items.length < limit; i++) {
+    for (const a of [privateArticles[i], publicOnly[i]]) {
+      if (!a || items.length >= limit) continue;
+      const url = safeNewsUrl(a.url);
+      if (!url || reportingUrls.has(url)) continue;
+      reportingUrls.add(url);
+      items.push({ ...a, url, id: `w${items.length + 1}` });
+    }
+  }
+  for (const kind of ['synthesis', 'reference'] as const) {
+    const notes = (privateResearch?.outputs ?? []).flatMap(out => out.notes).filter(n => n.kind === kind && n.text);
+    if (notes.length) items.push({ id: kind === 'synthesis' ? 'an1' : 'an2', kind: 'web', provenance: 'asknews',
+      title: kind === 'synthesis' ? 'AskNews DeepNews synthesis' : 'AskNews reference', source: 'via AskNews',
+      published: '', place: '', lat: null, lng: null, excerpt: notes.map(n => n.text).join('\n').slice(0, 4000) });
+  }
   const found = series.filter((x): x is Series => x !== null);
   for (const sr of found) {
     const item = seriesItem(sr, `q${items.filter(c => c.kind === 'series').length + 1}`);

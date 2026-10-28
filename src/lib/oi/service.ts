@@ -5,6 +5,8 @@
  * Keys arrive in headers only (X-OI-Key, or Authorization: Bearer), never
  * in a URL or a tool argument, where they would end up in logs and transcripts.
  */
+import { askNewsFor, operatorConfigured } from '../asknews';
+import type { AskNewsOperations } from '../asknews/mcp-domain';
 import { NextResponse } from 'next/server';
 import { getClientIp, isRateLimited } from '@/lib/ssrf-guard';
 import { DEPTHS, askRun, estimateCalls } from './engine';
@@ -25,7 +27,7 @@ export function disabled(): boolean {
 }
 
 export function json(data: unknown, status = 200, headers: Record<string, string> = {}) {
-  return NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
+  return NextResponse.json(data, { status, headers: { 'Cache-Control': 'private, no-store', ...headers } });
 }
 
 export function fail(status: number, error: string, extra: Record<string, unknown> = {}) {
@@ -65,6 +67,7 @@ export async function readBody(req: Request, max = 64_000): Promise<Record<strin
 }
 
 export interface Credentials {
+  asknews?: AskNewsOperations;
   provider?: ProviderId;
   key?: string;
   model?: string;
@@ -83,6 +86,7 @@ export function credentials(req: Request, body: Record<string, unknown> = {}): C
   if (key && !isPlausibleKey(key)) return { error: 'That does not look like an API key.' };
   if (modelRaw && !isPlausibleModel(modelRaw)) return { error: 'That does not look like a model id.' };
   return {
+    asknews: req.headers.has('X-AskNews-Key') || operatorConfigured() ? askNewsFor(req.headers) : undefined,
     provider: providerRaw ? (providerRaw.toLowerCase() as ProviderId) : undefined,
     key: key || undefined,
     model: modelRaw || undefined,
@@ -122,6 +126,7 @@ export function startPrediction(args: PredictArgs, creds: Credentials, ip: strin
     provider: creds.provider,
     model: creds.model || info.defaultModel,
     key: creds.key ?? '',
+    asknews: creds.asknews,
     ip,
   }, deps);
 }

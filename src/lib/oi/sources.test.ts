@@ -86,3 +86,11 @@ describe('evidenceLedger', () => {
     expect(rows[0].favors).toEqual({ Hold: 1 });
   });
 });
+
+it('retains every AskNews citation as Paraphrase even for exact headlines and synthesis, without changing legacy Verbatim', () => {
+  const items = JSON.parse(JSON.stringify([NEWS, { ...NEWS, id: 'w1', provenance: 'asknews' }, { ...NEWS, id: 'an1', provenance: 'asknews', title: 'AskNews DeepNews synthesis', excerpt: 'Envoys due in Geneva' }]));
+  const sources = sourceTexts(items);
+  expect(sources.get('w1')).toBe('');
+  expect(sources.get('an1')).toBe('');
+  expect(parseCites(['c1', 'w1', 'an1'].map(source => ({ source, quote: 'Envoys due in Geneva' })), sources).map(c => [c.source, c.exact])).toEqual([['c1', true], ['w1', false], ['an1', false]]);
+});

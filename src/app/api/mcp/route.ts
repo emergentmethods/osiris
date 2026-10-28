@@ -29,7 +29,7 @@ const enc = new TextEncoder();
 function rpcResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' },
   });
 }
 
@@ -88,15 +88,15 @@ export async function POST(req: Request) {
       const r = await handleMessage(m, { ...base, maxWaitSeconds: JSON_WAIT_S });
       if (r) out.push(r);
     }
-    return out.length ? rpcResponse(out) : new Response(null, { status: 202 });
+    return out.length ? rpcResponse(out) : new Response(null, { status: 202, headers: { 'Cache-Control': 'private, no-store' } });
   }
 
-  if (expectsNoReply(msg)) return new Response(null, { status: 202 });
+  if (expectsNoReply(msg)) return new Response(null, { status: 202, headers: { 'Cache-Control': 'private, no-store' } });
 
   const wantsStream = (req.headers.get('accept') || '').includes('text/event-stream');
   if (!wantsStream || !isLongCall(msg)) {
     const r = await handleMessage(msg, { ...base, maxWaitSeconds: JSON_WAIT_S });
-    return r ? rpcResponse(r) : new Response(null, { status: 202 });
+    return r ? rpcResponse(r) : new Response(null, { status: 202, headers: { 'Cache-Control': 'private, no-store' } });
   }
 
   // A long call, streamed: progress as it comes, keep-alives between, then the answer.
@@ -132,7 +132,7 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-store, no-transform',
+      'Cache-Control': 'private, no-store, no-transform',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
     },
@@ -140,9 +140,9 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  return new Response(null, { status: 405, headers: { Allow: 'POST' } });
+  return new Response(null, { status: 405, headers: { Allow: 'POST', 'Cache-Control': 'private, no-store' } });
 }
 
 export async function DELETE() {
-  return new Response(null, { status: 405, headers: { Allow: 'POST' } });
+  return new Response(null, { status: 405, headers: { Allow: 'POST', 'Cache-Control': 'private, no-store' } });
 }

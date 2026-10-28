@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toWarning, urgency, expiryLabel, type WarningAlert } from './LiveAlerts';
+import { toNews, toStory, toWarning, urgency, expiryLabel, type WarningAlert } from './LiveAlerts';
 
 /* Shaped as /api/weather sends them — NOAA/NWS, GDACS and NASA EONET. */
 const nws = {
@@ -89,5 +89,25 @@ describe('urgency', () => {
     expect(urgency(report({ flag: 'BREAKING' }))).toBeGreaterThan(urgency(report({})));
     expect(urgency(quake(6.1))).toBeGreaterThan(urgency(quake(4.9)));
     expect(urgency(report({ alertKind: 'rocket' }))).toBeGreaterThan(urgency(report({})));
+  });
+});
+
+it('accepts AskNews mentioned places after a JSON round trip without inventing precision', () => {
+  const article = JSON.parse(JSON.stringify({ id: 'asknews:a', title: 'A report', source_name: 'Publisher', via: 'AskNews',
+    published: '2026-10-27T10:00:00.000Z', link: 'https://publisher.test/a', key_points: ['A point'],
+    place: { name: 'Berlin', label: 'Berlin', precision: 'mentioned-place' }, coords: [52.52, 13.405] }));
+  expect(toNews(article)).toMatchObject({ place: { name: 'Berlin', label: 'Berlin', precision: 'mentioned-place' }, coords: [52.52, 13.405], via: 'AskNews' });
+});
+
+describe('stories', () => {
+  it('reads a story as /api/stories sends it and drops one without a headline or time', () => {
+    const story = toStory({ id: 'u', headline: 'Cyclone makes landfall', summary: 'Long form.', key_takeaways: ['Landfall at 2am.'], updated: '2026-10-28T00:54:05.000Z', categories: ['Weather'], locations: ['Visakhapatnam', 'India'], countries: ['IN'], n_articles: 38,
+      articles: [{ id: 'asknews:https://p.test/a', title: 'Evacuations ordered', source_name: 'Hindustan Times', published: '2026-10-27T17:11:23Z', link: 'https://p.test/a', coords: null }, { title: '' }],
+      place: { name: 'Visakhapatnam', label: 'Visakhapatnam, India', precision: 'mentioned-place' }, coords: [17.69, 83.22] });
+    expect(story).toMatchObject({ id: 'u', headline: 'Cyclone makes landfall', nArticles: 38, place: { label: 'Visakhapatnam, India' }, coords: [17.69, 83.22] });
+    expect(story?.articles).toEqual([{ id: 'asknews:https://p.test/a', title: 'Evacuations ordered', source: 'Hindustan Times', published: '2026-10-27T17:11:23Z', link: 'https://p.test/a', coords: null }]);
+    expect(story?.haystack).toContain('hindustan times');
+    expect(toStory({ id: 'u', updated: '2026-10-28T00:54:05.000Z' })).toBeNull();
+    expect(toStory({ id: 'u', headline: 'No time' })).toBeNull();
   });
 });

@@ -92,7 +92,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     headers: {
       'Content-Type': 'text/event-stream; charset=utf-8',
       // no-transform keeps compression from buffering the stream.
-      'Cache-Control': 'no-cache, no-store, no-transform',
+      'Cache-Control': 'private, no-store, no-transform',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
     },

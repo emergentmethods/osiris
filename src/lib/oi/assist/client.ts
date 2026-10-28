@@ -10,6 +10,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { errorOf, headersFor, type Engine } from '../client';
 import { converse } from './agent';
+import { askNewsHeaders } from '../../asknews-client';
+import { ASKNEWS_STATUS, type AskNewsErrorCode } from '../../asknews/domain';
+import type { AskNewsOutput } from '../../asknews/mcp-domain';
 import { FIND_LAYERS, LAYERS, SOURCES } from './catalog';
 import { asksForForecast, type AssistContext, type AssistMessage, type Call, type Mode, type ToolName } from './protocol';
 import { runCall, type Card, type Depth, type Site } from './tools';
@@ -103,6 +106,15 @@ export function useAssist(deps: AssistDeps) {
     let finalSay = '';
     const site: Site = {
       ...depsRef.current.site,
+      asknews: async (call, signal) => {
+        const res = await fetch('/api/asknews', { method: 'POST', headers: { 'Content-Type': 'application/json', ...askNewsHeaders() }, body: JSON.stringify(call), signal, cache: 'no-store' });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const code = typeof body.code === 'string' && body.code in ASKNEWS_STATUS ? body.code as AskNewsErrorCode : 'unavailable';
+          throw new Error(ASKNEWS_STATUS[code]);
+        }
+        return await res.json() as AskNewsOutput;
+      },
       forecast: (q, d) => (asksForForecast(said, mode)
         ? depsRef.current.startForecast(q, d, auth)
         : Promise.resolve({ ok: false as const, error: 'A forecast starts only when you ask for one: say "forecast…", or pick Forecast mode' })),
@@ -113,7 +125,7 @@ export function useAssist(deps: AssistDeps) {
         signal: ctrl.signal,
         context,
         step: async (messages, ctx, signal) => {
-          const res = await fetch('/api/oi/assist', { method: 'POST', headers: headersFor(auth.engine, auth.key), body: JSON.stringify({ messages, context: ctx }), signal });
+          const res = await fetch('/api/oi/assist', { method: 'POST', headers: { ...headersFor(auth.engine, auth.key), ...askNewsHeaders() }, body: JSON.stringify({ messages, context: ctx }), signal });
           if (!res.ok) throw new Error(await errorOf(res));
           const { step } = await res.json() as { step: { say?: string; actions?: Call[]; done?: boolean } };
           return { say: step.say ?? '', calls: Array.isArray(step.actions) ? step.actions : [], done: step.done !== false };

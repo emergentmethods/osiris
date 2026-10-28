@@ -58,6 +58,8 @@ interface OsirisMapProps {
   onEntityClick?: (entity: any) => void;
   onMouseCoords?: (coords: { lat: number; lng: number }) => void;
   onRightClick?: (coords: { lat: number; lng: number }) => void;
+  /** Reporting near the open dossier's spot, pinned while the dossier is open. */
+  nearbyReports?: PinnedReport[];
   onViewStateChange?: (vs: { zoom: number; latitude: number }) => void;
   /** `alertId` also opens that Live Alert's pin once the camera arrives.
    *  `duration` overrides the default 2 s flight. */
@@ -153,6 +155,9 @@ type LayerColor = NonNullable<Extract<Parameters<maplibregl.Map['addLayer']>[0],
 
 /** A Live Alerts report as /api/news sends it — only the fields a pin reads. */
 interface PinnedReport {
+  via?: 'AskNews';
+  also_via?: 'AskNews';
+  key_points?: string[];
   id: string;
   alert_kind?: string;
   title: string;
@@ -165,6 +170,8 @@ interface PinnedReport {
   media?: { kind?: string; video?: string | null; thumb?: string | null; duration?: string | null } | null;
 }
 
+const NO_REPORTS: PinnedReport[] = [];
+
 /** A report posted this recently gets the pulsing ring. */
 const ALERT_FRESH_MS = 15 * 60_000;
 
@@ -175,6 +182,8 @@ const DOUBLE_RIGHT_SLOP_PX = 12;
 
 /** What a pin carries: flat, as map feature properties must be. */
 interface AlertPinProps {
+  via: string;
+  key_points: string[];
   id: string;
   kind: AlertKind;
   /** Reports pinned to this same place, this one included. */
@@ -201,10 +210,11 @@ interface AlertPinFeature {
   properties: AlertPinProps;
 }
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, onReady, flyToLocation, alertPinIds = null, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, onLayerOff, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, onTransitStatus, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {}, onOiGlobe, onOiSelect, onOiHover, onOiFollow, oiHighlight = null }: OsirisMapProps) {
+function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, onReady, flyToLocation, alertPinIds = null, nearbyReports = NO_REPORTS, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, onLayerOff, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, onTransitStatus, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {}, onOiGlobe, onOiSelect, onOiHover, onOiFollow, oiHighlight = null }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  const alertPopupIds = useRef<string[]>([]);
   /* The Live Alert pins currently drawn, and the opener for one of them, so
      the feed's locate button can land on a pin and open it. */
   const alertPinsRef = useRef<AlertPinFeature[]>([]);
@@ -1003,6 +1013,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     // ── POPUP HELPER ──
     const popup = (coords: any, html: string) => {
       popupRef.current?.remove();
+      alertPopupIds.current = [];
       popupRef.current = new maplibregl.Popup({ closeButton: true, maxWidth: '420px', offset: 14 }).setLngLat(coords).setHTML(html).addTo(map);
     };
     const pStyle = `background:rgba(12,14,26,0.95);backdrop-filter:blur(16px);border-radius:10px;padding:16px;font-family:'JetBrains Mono',monospace;`;
@@ -1782,8 +1793,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           <span style="color:#8A8880;margin-left:auto;">${htmlEsc(timeAgo(p.published))}</span>
         </div>
         <div style="color:#F2EFE8;font-family:Inter,system-ui,sans-serif;font-size:12.5px;font-weight:600;line-height:1.35;">${htmlEsc(p.title)}</div>
-        <div style="margin-top:6px;font-size:9.5px;color:#8A8880;">${htmlEsc(p.source_name)}${p.lean ? ` · <span style="color:#9B978E;">${htmlEsc(p.lean)}</span>` : ''}</div>
-        <div style="margin-top:6px;font-size:9.5px;color:${c};" title="The place the post names, resolved against OpenStreetMap. Town-level: a post names a place, not an exact spot.">📍 ${htmlEsc(p.place_label)}<span style="color:#5C5A54;"> · ${p.precision === 'region' ? 'region' : 'place'} named in the post · © OpenStreetMap</span></div>
+        <div style="margin-top:6px;font-size:9.5px;color:#8A8880;">${htmlEsc(p.source_name)}${p.via === 'AskNews' ? ' · via AskNews' : ''}${p.lean ? ` · <span style="color:#9B978E;">${htmlEsc(p.lean)}</span>` : ''}</div>
+        <div style="margin-top:6px;font-size:9.5px;color:${c};" title="${p.precision === 'mentioned-place' ? 'A place mentioned in this article, not a verified incident location.' : 'The place the post names, resolved against OpenStreetMap. Town-level: a post names a place, not an exact spot.'}">📍 ${htmlEsc(p.place_label)}<span style="color:#5C5A54;"> · ${p.precision === 'mentioned-place' ? 'place mentioned' : `${p.precision === 'region' ? 'region' : 'place'} named in the post · © OpenStreetMap`}</span></div>
+        ${p.via === 'AskNews' ? `<ul style="padding-left:14px;font-size:11px;">${p.key_points.map(point => `<li>${htmlEsc(point)}</li>`).join('')}</ul>` : ''}
         ${media}
         ${link !== '#' ? `<a href="${link}" target="_blank" rel="noopener noreferrer" style="${linkStyle}color:${c};border:1px solid ${c}66;background:${c}1a;">OPEN POST ↗</a>` : ''}
         ${more ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);"><div style="font-size:8.5px;letter-spacing:0.14em;color:#5C5A54;">ALSO HERE</div>${more}</div>` : ''}
@@ -1806,8 +1818,9 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     };
     const openAlertPopup = (feature: AlertPinFeature, leadId?: string) => {
       popup(feature.geometry.coordinates, alertPopupHtml(reportsAt(feature.geometry.coordinates, leadId)));
+      alertPopupIds.current = reportsAt(feature.geometry.coordinates, leadId).map(report => report.id);
       markSelected(feature.properties.id);
-      popupRef.current?.once('close', () => markSelected(''));
+      popupRef.current?.once('close', () => { alertPopupIds.current = []; markSelected(''); });
     };
 
     map.on('click', 'alert-pin-dots', e => {
@@ -2296,7 +2309,12 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   // feed's locate button can still open a report's pin.
   useEffect(() => {
     if (!mapReady) return;
-    const reports: PinnedReport[] = Array.isArray(data.alert_pins) ? data.alert_pins : [];
+    const feed: PinnedReport[] = Array.isArray(data.alert_pins) ? data.alert_pins : [];
+    /* The dossier's nearby reporting joins the feed's pins while it is open;
+       a report already in the feed is pinned once. */
+    const inFeed = new Set(feed.map(r => r.id));
+    const nearby = new Set(nearbyReports.filter(r => !inFeed.has(r.id)).map(r => r.id));
+    const reports = [...feed, ...nearbyReports.filter(r => nearby.has(r.id))];
     /* The feed hides what its filters exclude; the map follows it, so a search
        or a theatre filter narrows the pins to the reports being read. */
     const shown = alertPinIds ? new Set(alertPinIds) : null;
@@ -2305,8 +2323,8 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     const placed = reports.flatMap((n): { n: PinnedReport; lat: number; lng: number }[] => {
       if (!n?.place || !Array.isArray(n.coords)) return [];
       const [lat, lng] = n.coords;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
-      if (shown && !shown.has(n.id)) return [];
+      if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180) return [];
+      if (shown && !shown.has(n.id) && !nearby.has(n.id)) return [];
       return [{ n, lat, lng }];
     });
 
@@ -2327,6 +2345,8 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         fresh: now - Date.parse(n.published) < ALERT_FRESH_MS,
         title: n.title,
         source_name: n.source_name,
+        via: n.via ?? n.also_via ?? '',
+        key_points: n.key_points ?? [],
         lean: n.lean ?? '',
         published: n.published,
         link: n.link ?? '',
@@ -2339,8 +2359,12 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         duration: n.media?.duration ?? '',
       },
     }));
-    setGeo('alert-pins', activeLayers.alert_pins ? alertPinsRef.current : []);
-  }, [mapReady, data.alert_pins, activeLayers.alert_pins, alertPinIds, setGeo]);
+    if (alertPopupIds.current.some(id => !reports.some(report => report.id === id))) popupRef.current?.remove();
+    /* AskNews pins belong to the AskNews layer: turning that source on
+       shows its mentioned places even with Live Alert Pins off. */
+    setGeo('alert-pins', activeLayers.alert_pins ? alertPinsRef.current
+      : activeLayers.asknews ? alertPinsRef.current.filter(f => f.properties.via === 'AskNews') : []);
+  }, [mapReady, data.alert_pins, nearbyReports, activeLayers.alert_pins, activeLayers.asknews, alertPinIds, setGeo]);
 
   /* The newest reports pulse, so something that just landed catches the eye
      without the other pins moving. Same 200ms tick the malware ring uses. */
@@ -2443,7 +2467,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['choke-glow','choke-dots','choke-label'], activeLayers.maritime);
     setVis(['ship-dots','ship-label'], activeLayers.maritime);
     setVis(['news-glow','news-dots','news-label'], activeLayers.live_news);
-    setVis(['alert-pin-glow','alert-pin-dots','alert-pin-label','alert-pin-pulse','alert-pin-selected'], activeLayers.alert_pins);
+    setVis(['alert-pin-glow','alert-pin-dots','alert-pin-label','alert-pin-pulse','alert-pin-selected'], activeLayers.alert_pins || activeLayers.asknews);
     setVis(['conflict-icons'], activeLayers.conflict_zones !== false);
 
     setVis(['balloon-dots','balloon-label'], activeLayers.balloons);

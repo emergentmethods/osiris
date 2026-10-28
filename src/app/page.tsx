@@ -7,6 +7,12 @@ import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Route, Radar
 import { type TerrainStatus } from '@/lib/map-terrain';
 import { loadCameraCatalog, mergeCameraCatalog } from '@/lib/camera-catalog';
 import IntelFeed from '@/components/IntelFeed';
+import AskNewsKeySheet from '@/components/AskNewsKeySheet';
+import { createDossierLoader, type RegionDossier } from '@/lib/region-dossier-client';
+import type { AskNewsArticle } from '@/lib/asknews/domain';
+import { askNewsHeaders, createNewsLoader, createStoriesLoader, loadAskNewsKey, subscribeAskNewsKey } from '@/lib/asknews-client';
+import type { AskNewsStory } from '@/lib/asknews/stories';
+import { ASKNEWS_STATUS } from '@/lib/asknews/domain';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
 import SearchBar from '@/components/SearchBar';
@@ -152,9 +158,10 @@ function ViewSegment({ active, onClick, title, icon: Icon, label, layoutId }: {
 /* /api/news answers with its own `timestamp` and `total`; merged at the root
    they would be overwritten by the next endpoint, so the feed keeps its
    metadata under its own key. */
-const newsTransform = (d: { news?: unknown[]; sources?: unknown[]; timestamp?: string }) => ({
+const newsTransform = (d: import('@/lib/asknews-client').DashboardNewsBody) => ({
   news: d.news,
-  news_meta: { sources: d.sources ?? [], fetchedAt: d.timestamp ?? null },
+  news_meta: { sources: d.sources ?? [], fetchedAt: d.timestamp ?? null, asknews: d.asknews },
+  asknews: (d.news ?? []).filter(n => n.via === 'AskNews'),
   /* The reports that resolved to a place they name — the Live Alert Pins layer. */
   alert_pins: (d.news ?? []).filter(n => (n as { place?: unknown } | null)?.place),
 });
@@ -187,8 +194,10 @@ export default function Dashboard() {
   const mouseCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   const coordsDisplayRef = useRef<HTMLDivElement>(null);
   const [locationLabel, setLocationLabel] = useState('');
-  const [regionDossier, setRegionDossier] = useState<any>(null);
+  const [regionDossier, setRegionDossier] = useState<RegionDossier | null>(null);
   const [dossierLoading, setDossierLoading] = useState(false);
+  const [dossierError, setDossierError] = useState(false);
+  const dossierLoader = useRef<ReturnType<typeof createDossierLoader> | null>(null);
   const [showSplash, setShowSplash] = useState(true);
   const [splashStage, setSplashStage] = useState(0);
   const [mapReady, setMapReady] = useState(false);
@@ -494,6 +503,7 @@ export default function Dashboard() {
        Off until asked for, like the other threat layers: the map opens with
        what a reader has chosen to see, and the feed reads the same without it. */
     alert_pins: false,
+    asknews: false,
     war_alerts: false,
     day_night: true,
     cables: true,
@@ -646,6 +656,9 @@ export default function Dashboard() {
     onTerrainFocus: () => setTerrainFocus(value => value + 1),
   };
   const [capabilities, setCapabilities] = useState<Record<string, boolean>>({});
+  const [askNewsSheet, setAskNewsSheet] = useState(false);
+  const [askNewsKey, setAskNewsKey] = useState({ key: '', remember: false });
+  const askNewsReady = !!askNewsKey.key || !!capabilities.asknews;
   const [liveFeedUrl, setLiveFeedUrl] = useState<string | null>(null);
   const [liveFeedName, setLiveFeedName] = useState('');
   const [liveFeedEmbedAllowed, setLiveFeedEmbedAllowed] = useState(true);
@@ -701,6 +714,9 @@ export default function Dashboard() {
         return next;
       });
     }
+
+    fetch('/api/news?probe=asknews', { cache: 'no-store' })
+      .then(r => r.json()).then(p => setCapabilities(c => ({ ...c, asknews: p.configured === true }))).catch(() => {});
 
     // Probe which credential-gated feeds this deployment has configured, so the
     // layer panel can hide toggles that could never return data.
@@ -870,13 +886,60 @@ export default function Dashboard() {
     }, 3000); // 3s debounce (was 1.5s)
   }, []);
 
-  // Region dossier (double right-click)
-  const handleRightClick = useCallback(async (coords: { lat: number; lng: number }) => {
-    setDossierLoading(true); setRegionDossier(null);
-    try {
-      const res = await fetch(`/api/region-dossier?lat=${coords.lat}&lng=${coords.lng}`);
-      if (res.ok) setRegionDossier(await res.json());
-    } catch (e) { console.warn('[OSIRIS] Suppressed error:', e instanceof Error ? e.message : e); } finally { setDossierLoading(false); }
+  /* Reporting found by dossier lookups stays pinned after the dossier closes
+     and builds up across lookups, so a tour of several places leaves its
+     reporting on the map. */
+  const [nearbyReports, setNearbyReports] = useState<AskNewsArticle[]>([]);
+  /* Story pins: each story at its place, plus any of its articles that carry
+     their own coordinates. They join the dossier's nearby reporting on the
+     map, outside the feed's filters, and go when the AskNews layer does. */
+  const [stories, setStories] = useState<AskNewsStory[] | undefined>(undefined);
+  const storyPins = useMemo(() => (stories ?? []).flatMap(story => [
+    ...(story.coords && story.place ? [{
+      id: `story:${story.id}`, title: story.headline, source_name: `AskNews story · ${story.n_articles} articles`, published: story.updated,
+      key_points: story.key_takeaways, via: 'AskNews' as const, link: story.articles[0]?.link ?? null, place: story.place, coords: story.coords,
+    }] : []),
+    ...story.articles.filter(a => a.coords && a.place),
+  ]), [stories]);
+  const mapReports = useMemo(() => [...nearbyReports, ...storyPins], [nearbyReports, storyPins]);
+  useLayoutEffect(() => {
+    dossierLoader.current = createDossierLoader(state => {
+      setRegionDossier(state.body); setDossierLoading(state.loading); setDossierError(state.error);
+      const found = state.body?.asknews?.articles;
+      if (found?.length) setNearbyReports(prev => {
+        const seen = new Set(prev.map(r => r.id));
+        const added = found.filter(r => !seen.has(r.id));
+        return added.length ? [...prev, ...added] : prev;
+      });
+    });
+    return () => dossierLoader.current?.dispose();
+  }, []);
+  /* A lookup asked for before the AskNews layer was on waits for the loader
+     to be configured with it, so the request carries the key. */
+  const pendingNearby = useRef<{ lat: number; lng: number } | null>(null);
+  useLayoutEffect(() => {
+    dossierLoader.current?.configure(activeLayers.asknews && askNewsReady, askNewsHeaders());
+    const pending = pendingNearby.current;
+    if (pending && activeLayers.asknews && askNewsReady) { pendingNearby.current = null; void dossierLoader.current?.open(pending); }
+  }, [activeLayers.asknews, askNewsReady, askNewsKey]);
+  /* The toolbar's "reporting here" button: AskNews within 50 km of the view
+     centre over the past 24 hours, the same lookup a double right-click makes. */
+  const searchReportingHere = useCallback(() => {
+    if (!mapCenter) return;
+    const at = { lat: mapCenter.lat, lng: mapCenter.lng };
+    if (!askNewsReady) { setAskNewsSheet(true); return; }
+    if (!activeLayers.asknews) { pendingNearby.current = at; setActiveLayers(prev => ({ ...prev, asknews: true })); return; }
+    void dossierLoader.current?.open(at);
+  }, [mapCenter, askNewsReady, activeLayers.asknews]);
+  /* Turning the AskNews layer off clears the pins its lookups left. Adjusted
+     during render, as React asks for state that follows a prop. */
+  const [nearbyLayerOn, setNearbyLayerOn] = useState(!!activeLayers.asknews);
+  if (nearbyLayerOn !== !!activeLayers.asknews) {
+    setNearbyLayerOn(!!activeLayers.asknews);
+    if (!activeLayers.asknews) setNearbyReports([]);
+  }
+  const handleRightClick = useCallback((coords: { lat: number; lng: number }) => {
+    void dossierLoader.current?.open(coords);
   }, []);
   // Entity click handler (hoisted from JSX to comply with Rules of Hooks - Fixes #113)
   const handleEntityClick = useCallback((entity: any) => {
@@ -987,13 +1050,61 @@ export default function Dashboard() {
     }
   }, []);
 
+  const newsLoader = useRef<ReturnType<typeof createNewsLoader> | null>(null);
+  const [askNewsStatus, setAskNewsStatus] = useState<keyof typeof ASKNEWS_STATUS>('off');
+  useLayoutEffect(() => {
+    newsLoader.current = createNewsLoader(body => {
+      dataRef.current = { ...dataRef.current, ...newsTransform(body) };
+      setAskNewsStatus(body.asknews?.status ?? 'off');
+      setDataVersion(v => v + 1);
+    });
+    return () => newsLoader.current?.dispose();
+  }, []);
+  /* The stories AskNews updated in the last day: the AskNews layer's top-level
+     view, read on its own schedule since it is up to ten calls a pull. Off,
+     `stories` is absent and the alerts panel shows no Stories tab. */
+  const storiesLoader = useRef<ReturnType<typeof createStoriesLoader> | null>(null);
+  useLayoutEffect(() => {
+    storiesLoader.current = createStoriesLoader(body => {
+      const next = body.asknews?.status === 'off' ? undefined : body.stories;
+      dataRef.current = { ...dataRef.current, stories: next, stories_meta: { fetchedAt: body.timestamp ?? null, asknews: body.asknews } };
+      setStories(next);
+      setDataVersion(v => v + 1);
+    });
+    return () => storiesLoader.current?.dispose();
+  }, []);
+  useEffect(() => {
+    const changed = () => {
+      newsLoader.current?.configure(false, {});
+      storiesLoader.current?.configure(false, {});
+      dossierLoader.current?.configure(false, {});
+      setAskNewsKey(loadAskNewsKey());
+      setActiveLayers(prev => ({ ...prev, asknews: false }));
+    };
+    const initial = window.setTimeout(() => setAskNewsKey(loadAskNewsKey()), 0);
+    const unsubscribe = subscribeAskNewsKey(changed);
+    return () => { window.clearTimeout(initial); unsubscribe(); };
+  }, [newsLoader]);
+  useLayoutEffect(() => {
+    const enabled = activeLayers.asknews && askNewsReady;
+    newsLoader.current?.configure(enabled, askNewsHeaders());
+    void newsLoader.current?.load();
+    const poll = setInterval(() => void newsLoader.current?.load(true), 300000);
+    storiesLoader.current?.configure(enabled, askNewsHeaders());
+    void storiesLoader.current?.load();
+    const storiesPoll = setInterval(() => void storiesLoader.current?.load(true), 600000);
+    return () => { clearInterval(poll); clearInterval(storiesPoll); newsLoader.current?.dispose(); storiesLoader.current?.dispose(); };
+  }, [activeLayers.asknews, askNewsReady, askNewsKey, newsLoader]);
+  const askNewsPanelProps = {
+    onAskNewsKey: () => setAskNewsSheet(true), asknewsReady: askNewsReady,
+  };
+
   // ── PROGRESSIVE DATA LOADING (request-optimized) ──
   useEffect(() => {
     // Priority 1: Core feeds (always needed for panels)
     const eqUrl = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
     const eqTransform = (data: any) => ({ earthquakes: (data.features || []).map((f: any) => ({ id: f.id, lat: f.geometry?.coordinates?.[1] || 0, lng: f.geometry?.coordinates?.[0] || 0, depth: f.geometry?.coordinates?.[2] || 0, magnitude: f.properties?.mag, place: f.properties?.place, time: f.properties?.time, url: f.properties?.url, tsunami: f.properties?.tsunami, type: f.properties?.type, felt: f.properties?.felt, alert: f.properties?.alert })) });
     fetchEndpoint(eqUrl, eqTransform);
-    fetchEndpoint('/api/news', newsTransform);
     /* Official warnings — NOAA/NWS, GDACS, NASA EONET. A core feed rather than
        a layer fetch: Live Alerts lists them whether or not the weather layer
        is on, and this is the one thing in the panel a reader may have to act on. */
@@ -1022,8 +1133,6 @@ export default function Dashboard() {
     // Polling — OPTIMIZED intervals to minimize edge requests
     const intervals = [
       setInterval(() => fetchEndpoint(eqUrl, eqTransform, undefined, { skipWhenHidden: true }), 900000),  // 15 min (was 5)
-      // 5 min: the route caches each channel for 3, so Telegram sees at most one read per channel per window however many tabs poll.
-      setInterval(() => fetchEndpoint('/api/news', newsTransform, undefined, { skipWhenHidden: true }), 300000),
       // 5 min: a warning that has just been issued is the point of the panel.
       setInterval(() => fetchEndpoint('/api/weather', d => ({ weather_events: d.events }), undefined, { skipWhenHidden: true }), 300000),
       setInterval(() => fetchEndpoint('/api/markets', d => ({ markets: d }), undefined, { skipWhenHidden: true }), 900000), // 15 min (was 5)
@@ -1362,6 +1471,7 @@ export default function Dashboard() {
 
   return (
     <main className="fixed inset-0 w-full h-full bg-[var(--bg-void)] overflow-hidden">
+      {askNewsSheet && <AskNewsKeySheet onClose={() => setAskNewsSheet(false)} serverConfigured={!!capabilities.asknews} />}
 
       {/* ── SPLASH ── */}
       <AnimatePresence onExitComplete={() => setSplashGone(true)}>
@@ -1575,6 +1685,7 @@ export default function Dashboard() {
           onReady={() => setMapReady(true)}
           flyToLocation={flyToLocation}
           alertPinIds={pinnedAlertIds}
+          nearbyReports={mapReports}
           sweepData={sweepData}
           scanTargets={scanTargets}
           demoMode={demoMode}
@@ -1807,7 +1918,7 @@ export default function Dashboard() {
 
 
       {/* ── NEW SIDEBAR (Root Level) ── */}
-      {showLayers && !isMobile && <div data-hud><LayerPanel {...terrainPanelProps} revealed={revealed} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={layerLiveStatus} /></div>}
+      {showLayers && !isMobile && <div data-hud><LayerPanel {...askNewsPanelProps} {...terrainPanelProps} revealed={revealed} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={{ ...layerLiveStatus, asknews: !askNewsReady ? 'Needs key · click to configure' : ASKNEWS_STATUS[askNewsStatus] ?? 'Ready · source off' }} /></div>}
 
 
 
@@ -1893,7 +2004,7 @@ export default function Dashboard() {
           <AnimatePresence>
             {showAlerts && (
               <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="absolute right-12 top-1/2 -translate-y-1/2 w-80">
-                <LiveAlerts data={data} onLocate={(lat, lng, options) => setFlyToLocation({ lat, lng, zoom: options?.zoom, alertId: options?.alertId, ts: Date.now() })} pinsOn={activeLayers.alert_pins} onTogglePins={on => setActiveLayers(prev => ({ ...prev, alert_pins: on }))} onPinnedChange={setPinnedAlertIds} onWatchFeed={(url, name) => { setLiveFeedUrl(url); setLiveFeedName(name); }} onRefresh={() => fetchEndpoint('/api/news', newsTransform)} />
+                <LiveAlerts data={data} onLocate={(lat, lng, options) => setFlyToLocation({ lat, lng, zoom: options?.zoom, alertId: options?.alertId, ts: Date.now() })} pinsOn={activeLayers.alert_pins} onTogglePins={on => setActiveLayers(prev => ({ ...prev, alert_pins: on }))} onPinnedChange={setPinnedAlertIds} onWatchFeed={(url, name) => { setLiveFeedUrl(url); setLiveFeedName(name); }} onRefresh={() => newsLoader.current?.load()} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -2034,7 +2145,12 @@ export default function Dashboard() {
           </AnimatePresence>
         </div>
 
-
+        <div className="relative group">
+          <button onClick={searchReportingHere} disabled={!mapCenter} className="relative w-8 h-8 rounded-full flex items-center justify-center transition-all focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50 border duration-200 bg-[var(--gold-primary)]/[0.07] border-[var(--gold-primary)]/35 hover:bg-[var(--gold-primary)]/15 hover:border-[var(--gold-primary)]/60 hover:shadow-[0_0_14px_rgba(var(--gold-rgb),0.25)] disabled:opacity-40" title={askNewsReady ? 'Reporting here — AskNews within 50 km of the view centre, past 24 hours' : 'Reporting here — needs an AskNews key'} aria-label="Reporting here">
+            <Newspaper className="w-4 h-4 text-[var(--gold-primary)]" />
+          </button>
+          <span className="absolute right-11 top-1/2 -translate-y-1/2 px-2 py-1 text-[9px] font-mono tracking-wider text-white/80 bg-black/80 backdrop-blur-sm rounded whitespace-nowrap opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity pointer-events-none">REPORTING HERE</span>
+        </div>
       </motion.div>}
 
       {/* ── LIVE FEED VIEWER OVERLAY ── */}
@@ -2209,7 +2325,7 @@ export default function Dashboard() {
                           <div><div className="hud-label" style={{fontSize:'9px'}}>NUC</div><div className="hud-value text-[10px]" style={{color:'var(--accent-nuclear)'}}>{(data.infrastructure?.length||0)}</div></div>
                         </div>
                       </div>
-                      <LayerPanel {...terrainPanelProps} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={layerLiveStatus} />
+                      <LayerPanel {...askNewsPanelProps} {...terrainPanelProps} data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} liveStatus={{ ...layerLiveStatus, asknews: !askNewsReady ? 'Needs key · click to configure' : ASKNEWS_STATUS[askNewsStatus] ?? 'Ready · source off' }} />
                       <div className="mt-8">
                         <ViewPresets onNavigate={(lat, lng, zoom) => { setFlyToLocation({ lat, lng, zoom, ts: Date.now() }); setMobilePanel(null); }} />
                       </div>
@@ -2275,18 +2391,20 @@ export default function Dashboard() {
       {/* Scale bar is now integrated into the map controls section above */}
 
       {/* ── Region Dossier ── */}
-      {(regionDossier || dossierLoading) && (
+      {(regionDossier || dossierLoading || dossierError) && (
         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="absolute top-16 md:top-20 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 z-[300] md:w-[480px] max-h-[65vh] overflow-y-auto styled-scrollbar">
           <div className="glass-panel p-5 osiris-glow">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-mono font-bold text-[var(--gold-primary)] tracking-wider">REGION DOSSIER</h2>
-              <button onClick={() => { setRegionDossier(null); setDossierLoading(false); }} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] text-xs">✕</button>
+              <button onClick={() => dossierLoader.current?.close()} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] text-xs">✕</button>
             </div>
             {dossierLoading ? (
               <div className="text-center py-8">
                 <div className="w-5 h-5 border-2 border-[var(--gold-primary)] border-t-transparent rounded-full animate-spin mx-auto mb-2" />
                 <span className="text-[9px] font-mono text-[var(--text-muted)] tracking-widest">COMPILING INTEL...</span>
               </div>
+            ) : dossierError ? (
+              <p role="status" className="text-xs text-[var(--text-muted)]">Region dossier unavailable. Try another location.</p>
             ) : regionDossier && (
               <div className="space-y-3">
                 <div><div className="hud-label mb-0.5">LOCATION</div><div className="text-xs text-[var(--text-primary)]">{regionDossier.location?.display_name}</div></div>
@@ -2299,6 +2417,21 @@ export default function Dashboard() {
                     <div><div className="hud-label mb-0.5">LANGUAGES</div><div className="text-xs text-[var(--text-primary)]">{regionDossier.country.languages?.join(', ')}</div></div>
                     <div><div className="hud-label mb-0.5">AREA</div><div className="text-xs text-[var(--text-primary)]">{regionDossier.country.area?.toLocaleString()} km²</div></div>
                   </div>
+                )}
+                {regionDossier.asknews && (
+                  <section aria-label="Reporting near here" className="space-y-2">
+                    <div className="hud-label">REPORTING NEAR HERE · via AskNews</div>
+                    <div className="text-[9px] text-[var(--text-muted)]">Within 50 km · past 24 hours · up to 10 articles</div>
+                    {regionDossier.asknews.status !== 'ok' && <p role="status" className="text-xs text-[var(--text-muted)]">{ASKNEWS_STATUS[regionDossier.asknews.status]}</p>}
+                    {regionDossier.asknews.status === 'ok' && !regionDossier.asknews.articles.length && <p className="text-xs text-[var(--text-muted)]">No nearby reporting found.</p>}
+                    {regionDossier.asknews.articles.map(article => (
+                      <article key={article.id} className="border-t border-white/10 pt-2">
+                        <a href={article.link} target="_blank" rel="noopener noreferrer" className="text-xs text-[var(--gold-primary)]">{article.title} ↗</a>
+                        <div className="text-[9px] text-[var(--text-muted)]">{article.source_name} · {article.published && <time dateTime={article.published}>{new Date(article.published).toLocaleString()}</time>} · via AskNews</div>
+                        <ul className="list-disc pl-3 text-[10px] text-[var(--text-secondary)]">{article.key_points.map((point, i) => <li key={i}>{point}</li>)}</ul>
+                      </article>
+                    ))}
+                  </section>
                 )}
                 {regionDossier.head_of_state && (<div><div className="hud-label mb-0.5">HEAD OF STATE</div><div className="text-xs text-[var(--gold-primary)]">{regionDossier.head_of_state.name}</div><div className="text-[9px] text-[var(--text-muted)]">{regionDossier.head_of_state.position}</div></div>)}
                 {regionDossier.wikipedia && (<div><div className="hud-label mb-1">INTELLIGENCE BRIEF</div><div className="flex gap-3">{regionDossier.wikipedia.thumbnail && <img src={regionDossier.wikipedia.thumbnail} alt="" className="w-14 h-14 rounded object-cover flex-shrink-0" />}<p className="text-[9px] text-[var(--text-secondary)] leading-relaxed">{regionDossier.wikipedia.extract}</p></div></div>)}
